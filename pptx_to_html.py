@@ -1,0 +1,2625 @@
+import os
+import json
+import re
+import io
+import html
+import math
+import logging
+import hashlib
+import time
+from pathlib import Path
+from pptx import Presentation
+from pptx.enum.shapes import MSO_SHAPE_TYPE
+from PIL import Image
+import requests
+import xml.etree.ElementTree as ET
+
+try:
+    from lxml import etree
+
+    HAS_LXML = True
+except ImportError:
+    HAS_LXML = False
+    etree = None
+
+# Office Math Markup Language (OMML) namespace
+OMML_NS = "{http://schemas.openxmlformats.org/officeDocument/2006/math}"
+MATHML_NS = "{http://www.w3.org/1998/Math/MathML}"
+
+# Константы порогов для динамической типографии и layout
+TEXT_LEN_HEAVY = 500  # Если текст длиннее, делаем левую колонку шире
+TEXT_LEN_LIGHT = 200  # Если текст короче, делаем правую колонку (изображение) шире
+TEXT_LEN_CONDENSED = 800  # Порог для перехода на сжатый шрифт (для узких колонок)
+TEXT_LEN_TIGHT = 1200  # Порог для перехода на очень сжатый шрифт (для узких колонок)
+ASPECT_WIDE = 1.8  # Соотношение сторон, при котором изображение считаются широким
+ASPECT_TALL = 0.7  # Соотношение сторон, при котором изображение считается высоким
+CAPTION_H_DIST_FACTOR = 0.8  # Максимальное горизонтальное расстояние между подписью и изображением (относительно ширины изображения)
+CAPTION_V_GAP_MIN = (
+    -5000
+)  # Минимальный вертикальный зазор между подписью и изображением
+CAPTION_V_GAP_MAX = 30000  # Максимальный вертикальный зазор
+
+logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+logger = logging.getLogger(__name__)
+
+# Базовые пути
+BASE_DIR = Path(__file__).parent.resolve()
+
+
+# ==============================================================================
+# ВСТРОЕННЫЙ HTML-ШАБЛОН (все стили и разметка вшиты в скрипт)
+# ==============================================================================
+BASE_HTML_TEMPLATE = """<!DOCTYPE html>
+<html class="no-js" lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>НИЦ ГГН - Денис Шустов</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=Outfit:wght@500;700&family=Roboto+Mono&display=swap"
+        rel="stylesheet" media="print" onload="this.media='all'">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js" defer></script>
+    <script src="https://unpkg.com/lucide@latest" defer></script>
+    <!-- Local MathJax for professional formula rendering -->
+    <script src="libs/mathjax/tex-mml-chtml.js" defer></script>
+        <style>
+            :root {
+                --bg-deep: #05080e;
+                --bg-card: rgba(15, 23, 42, 0.7);
+                --accent: #00f2ff;
+                --accent-soft: rgba(0, 242, 255, 0.1);
+                --text-main: #f8fafc;
+                --text-dim: #94a3b8;
+                --glass-border: rgba(255, 255, 255, 0.1);
+                --gradient-accent: linear-gradient(135deg, #00f2ff 0%, #0066ff 100%);
+                --glow-cyan: 0 0 20px rgba(0, 242, 255, 0.4);
+
+                --logo-height: 160px;
+                --logo-top: -1.0rem;
+                --logo-right: 4rem;
+                --header-height: 85px;
+                --slide-padding-v: 2rem;
+                --slide-padding-h: 4rem;
+                --panel-padding: 3.5rem;
+
+                --fs-main-title: 3.5rem;
+                --fs-slide-title: 1.5rem;
+                --fs-slide-num: 1.1rem;
+                --fs-sub-heading: 1.8rem;
+                --fs-text-main: 1.3rem;
+                --fs-tag: 0.9rem;
+                --fs-viz-caption: 1.1rem;
+                --fs-viz-desc: 1.0rem;
+
+                --fs-presenter-name: 1.5rem;
+                --fs-presenter-info: 1.1rem;
+                --fs-presenter-label: 0.8rem;
+                --fs-research-year: 5rem;
+
+                /* Таблицы */
+                --fs-table-th: 1.05rem;
+                --fs-table-td: 1.1rem;
+
+                --gap-main: 4rem;
+                --gap-items: 1.5rem;
+
+                /* Config-driven variables */
+                --icon-size: 1.6rem;
+                --bullet-icon-size: 1.6rem;
+                --bullet-indent: 2rem;
+                --bullet-border: 2px solid rgba(0, 242, 255, 0.15);
+                --bullet-bg: rgba(0, 242, 255, 0.03);
+                --formula-fallback-font: 'Roboto Mono', monospace;
+                --formula-fallback-size: 0.9em;
+            }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        body {
+            background-color: var(--bg-deep);
+            color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+            overflow: hidden;
+            height: 100vh;
+        }
+
+        .presentation {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            transition: transform 0.8s cubic-bezier(0.85, 0, 0.15, 1);
+        }
+
+        .slide {
+            flex: 0 0 100vw;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            padding: var(--slide-padding-v) var(--slide-padding-h);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .bg-element {
+            position: absolute;
+            z-index: -1;
+            filter: blur(80px);
+            opacity: 0.15;
+            border-radius: 50%;
+        }
+
+        .bg-1 {
+            width: 600px;
+            height: 600px;
+            background: var(--gradient-accent);
+            top: -200px;
+            right: -100px;
+        }
+
+        .bg-2 {
+            width: 400px;
+            height: 400px;
+            background: #ff00ea;
+            bottom: -100px;
+            left: -100px;
+            opacity: 0.05;
+        }
+
+        .slide-header {
+            display: flex;
+            justify-content: flex-start;
+            align-items: center;
+            gap: 1.5rem;
+            margin-bottom: var(--margin-header);
+            border-bottom: 1px solid var(--glass-border);
+            padding-bottom: 0.75rem;
+            position: relative;
+            height: var(--header-height);
+        }
+
+        .logo-container {
+            position: absolute;
+            top: var(--logo-top);
+            right: var(--logo-right);
+            height: var(--logo-height);
+            display: flex;
+            align-items: center;
+            z-index: 10;
+        }
+
+        .header-logo {
+            height: 100%;
+            width: auto;
+            filter: drop-shadow(0 0 20px rgba(0, 242, 255, 0.5));
+            opacity: 0.9;
+        }
+
+        .hide-title .slide-title {
+            display: none;
+        }
+
+        .slide-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: var(--fs-slide-title);
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            color: var(--accent);
+            font-weight: 700;
+        }
+
+        .slide-number {
+            font-family: 'Roboto Mono', monospace;
+            font-size: var(--fs-slide-num);
+            color: var(--text-dim);
+            padding-right: 1rem;
+            border-right: 1px solid var(--glass-border);
+        }
+
+        .slide-content-title {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            max-width: 900px;
+            margin: 0 auto;
+            width: 100%;
+        }
+
+        .main-heading {
+            font-family: 'Inter', sans-serif;
+            font-size: var(--fs-main-title);
+            font-weight: 800;
+            line-height: 1.1;
+            margin-bottom: 3rem;
+            text-align: center;
+            background: linear-gradient(to bottom right, #fff 50%, #94a3b8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .presenter-card {
+            background: var(--bg-card);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--glass-border);
+            padding: 2rem;
+            border-right: 4px solid var(--accent);
+            align-self: flex-start;
+            width: 500px;
+            position: relative;
+            z-index: 20;
+        }
+
+        .presenter-label {
+            color: var(--accent);
+            font-size: var(--fs-presenter-label);
+            text-transform: uppercase;
+            letter-spacing: 0.2em;
+            margin-bottom: 0.5rem;
+            display: block;
+        }
+
+        .presenter-name {
+            font-size: var(--fs-presenter-name);
+            font-weight: 800;
+            margin-bottom: 0.25rem;
+            color: var(--text-main);
+        }
+
+        .presenter-info {
+            color: var(--text-dim);
+            font-size: var(--fs-presenter-info);
+            line-height: 1.6;
+            word-wrap: break-word;
+            overflow-wrap: anywhere;
+            max-width: 90%;
+        }
+
+        /* Presenter card positioned at left-bottom on intro slide */
+        .slide.hide-title .presenter-card {
+            position: absolute;
+            bottom: var(--slide-padding-v);
+            left: var(--slide-padding-h);
+        }
+
+        .slide-split {
+            display: grid;
+            grid-template-columns: 1.2fr 1.8fr;
+            gap: var(--gap-main);
+            flex: 1;
+            min-height: 0;
+        }
+
+        .img-stack {
+            display: flex;
+            flex-direction: row;
+            gap: var(--gap-main);
+            align-items: stretch;
+            height: 100%;
+            min-height: 0;
+        }
+
+        .viz-item {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            flex: 1;
+            min-height: 0;
+        }
+
+        .viz-caption {
+            border-left: 4px solid var(--accent);
+            padding: 0.75rem 1rem;
+            background: linear-gradient(to right, var(--accent-soft), transparent);
+            color: var(--text-main);
+            font-size: var(--fs-viz-caption);
+            font-weight: 600;
+            line-height: 1.4;
+        }
+
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+            font-size: var(--fs-table-td);
+            color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+        }
+        .data-table th, .data-table td {
+            border: 1px solid var(--glass-border);
+            padding: 0.25rem 0.5rem;
+            text-align: left;
+            vertical-align: top;
+            line-height: 1.3;
+            word-break: break-word;
+            overflow-wrap: break-word;
+        }
+        .data-table th {
+            background: var(--accent-soft);
+            color: var(--accent);
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            font-size: var(--fs-table-th);
+        }
+        .data-table tr:nth-child(even) {
+            background: rgba(255, 255, 255, 0.02);
+        }
+        .data-table tr:hover {
+            background: rgba(0, 242, 255, 0.05);
+        }
+
+        .analytical-panel {
+            background: var(--bg-card);
+            backdrop-filter: blur(8px);
+            border: 1px solid var(--glass-border);
+            padding: var(--panel-padding);
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            overflow-y: auto;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.1), inset 1px 0 0 rgba(255,255,255,0.05), 0 8px 32px rgba(0,0,0,0.3);
+            position: relative;
+        }
+
+        .analytical-panel::before {
+            content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E");
+            pointer-events: none; z-index: -1; opacity: 0.15;
+        }
+
+        .section-tag {
+            font-family: 'Roboto Mono', monospace;
+            background: var(--accent-soft);
+            color: var(--accent);
+            padding: 4px 12px;
+            font-size: var(--fs-tag);
+            width: fit-content;
+            border-radius: 4px;
+        }
+
+        .sub-heading {
+            font-size: var(--fs-sub-heading);
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+
+        .list-item {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1rem;
+            align-items: flex-start;
+        }
+
+        .list-item i {
+            margin-top: 4px;
+            color: var(--accent);
+            flex-shrink: 0;
+            width: var(--icon-size);
+            height: var(--icon-size);
+        }
+
+        /* Bullet list styling - distinct visual level */
+        .list-item-bullet {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1rem;
+            align-items: flex-start;
+            padding-left: var(--bullet-indent);
+            border-left: var(--bullet-border);
+            background: var(--bullet-bg);
+            border-radius: 0 8px 8px 0;
+            padding: 0.5rem 1rem 0.5rem 0.5rem;
+        }
+        .list-item-bullet i {
+            margin-top: 4px;
+            color: var(--accent);
+            flex-shrink: 0;
+            width: var(--bullet-icon-size);
+            height: var(--bullet-icon-size);
+            opacity: 0.85;
+        }
+
+        .viz-container:has(.viz-item) {
+            max-width: fit-content;
+        }
+         .viz-container:has(.viz-item) .viz-item {
+             width: auto;
+             max-width: 60vw;
+         }
+
+         .viz-item.wide {
+             grid-column: span 2;
+         }
+         .viz-item.tall {
+             grid-row: span 2;
+         }
+
+        .list-text {
+            color: var(--text-dim);
+            font-size: var(--fs-text-main);
+            line-height: 1.6;
+        }
+
+        .list-text strong {
+            color: var(--text-main);
+        }
+
+        /* Formula fallback styling */
+        .formula-fallback {
+            font-family: var(--formula-fallback-font, 'Roboto Mono'), monospace;
+            font-size: var(--formula-fallback-size, 0.9em);
+            white-space: nowrap;
+            color: var(--accent);
+            opacity: 0.9;
+            display: inline-block;
+            padding: 0.1rem 0.3rem;
+            background: rgba(0, 242, 255, 0.05);
+            border-radius: 4px;
+        }
+        .formula-container {
+            display: inline-block;
+            vertical-align: middle;
+            margin: 0 0.2rem;
+        }
+
+        .viz-box {
+            background: radial-gradient(circle at center, rgba(0, 242, 255, 0), transparent);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+            height: 100%;
+            width: 100%;
+            min-height: 0;
+            cursor: zoom-in;
+            transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .viz-box:hover {
+            border-color: var(--accent);
+            box-shadow:
+                0 0 20px rgba(0, 242, 255, 0.2),
+                inset 0 0 30px rgba(0, 242, 255, 0.15);
+        }
+
+        .viz-box::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image:
+                linear-gradient(rgba(0, 242, 255, 0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 242, 255, 0.05) 1px, transparent 1px);
+            background-size: 20px 20px;
+            opacity: 0;
+            transition: opacity 0.4s;
+            pointer-events: none;
+        }
+
+        .viz-box:hover::after {
+            opacity: 1;
+        }
+
+        .viz-box img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+            transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .viz-box:hover img {
+            transform: scale(1.02);
+        }
+
+        .lightbox {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(5, 8, 14, 0.95);
+            backdrop-filter: blur(15px);
+            z-index: 2000;
+            display: none;
+            justify-content: center;
+            align-items: center;
+            opacity: 0;
+        }
+
+        .lightbox-content {
+            width: 90vw;
+            height: 85vh;
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            box-shadow: 0 0 50px rgba(0, 0, 0, 0.5);
+            border: 1px solid var(--glass-border);
+            background: rgba(15, 23, 42, 0.8);
+            border-radius: 12px;
+            padding: 1rem;
+        }
+
+        .lightbox-img {
+            width: 100%;
+            height: 100%;
+            display: block;
+            object-fit: contain;
+            cursor: pointer;
+            transition: transform 0.3s;
+        }
+
+        .lightbox-img:hover {
+            transform: scale(1.01);
+        }
+
+        .nav-controls {
+            display: none;
+        }
+
+        .animate-up {
+            opacity: 0;
+            transform: translateY(30px);
+            transition: opacity 0.8s ease-out, transform 0.8s ease-out;
+        }
+        
+        /* Fallback: if JS is disabled or GSAP fails, show content */
+        .no-js .animate-up,
+        .js-fallback .animate-up {
+            opacity: 1;
+            transform: none;
+        }
+
+        @media print {
+            .nav-controls,
+            .bg-element {
+                display: none;
+            }
+
+            body {
+                overflow: visible;
+            }
+
+            .slide {
+                height: 100vh;
+                page-break-after: always;
+                padding: 2rem;
+                background: #fff !important;
+                color: #000 !important;
+            }
+
+            .bg-card {
+                background: none !important;
+                color: #000 !important;
+                border-color: #eee !important;
+            }
+        }
+    
+        .hud-status {
+            position: fixed; top: 1.5rem; left: 3.5rem;
+            display: flex; align-items: center; gap: 12px;
+            font-family: 'Roboto Mono', monospace; font-size: 0.75rem; color: var(--accent); z-index: 1000;
+        }
+        .hud-dot {
+            width: 6px; height: 6px; background-color: #ff00ea; border-radius: 50%;
+            animation: blinkHUD 1.5s infinite;
+        }
+        @keyframes blinkHUD { 0%, 100% { opacity: 1; box-shadow: 0 0 8px #ff00ea; } 50% { opacity: 0.3; box-shadow: none; } }
+        .hud-progress-container {
+            position: fixed; top: 0; left: 0; width: 100%; height: 2px; background: rgba(255,255,255,0.05); z-index: 1001;
+        }
+        .hud-progress-bar {
+            height: 100%; background: var(--accent); width: 0%; transition: width 0.5s ease; box-shadow: 0 0 10px var(--accent);
+        }
+        .hud-corners {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 999;
+        }
+        .corner { position: absolute; width: 20px; height: 20px; border: 1px solid var(--accent); opacity: 0.5; }
+        .corner.topleft { top: 20px; left: 20px; border-right: none; border-bottom: none; }
+        .corner.topright { top: 20px; right: 20px; border-left: none; border-bottom: none; }
+        .corner.bottomleft { bottom: 20px; left: 20px; border-right: none; border-top: none; }
+        .corner.bottomright { bottom: 20px; right: 20px; border-left: none; border-top: none; }
+
+        .presenter-card {
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.1), inset 1px 0 0 rgba(255,255,255,0.05), 0 8px 32px rgba(0,0,0,0.3);
+            position: relative; overflow: hidden;
+        }
+        .presenter-card::before {
+            content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E");
+            pointer-events: none; z-index: -1; opacity: 0.15;
+        }
+
+        .mag-nav {
+            position: fixed; top: 80px; height: calc(100vh - 80px); width: 8vw; z-index: 1000;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; opacity: 0; transition: opacity 0.4s, background 0.4s;
+            background: rgba(0, 242, 255, 0);
+        }
+        .mag-nav.left { left: 0; border-left: 2px solid transparent; }
+        .mag-nav.right { right: 0; border-right: 2px solid transparent; }
+        .mag-nav:hover { opacity: 1; background: rgba(0, 242, 255, 0.02); }
+        .mag-nav.left:hover { border-left-color: var(--accent); }
+        .mag-nav.right:hover { border-right-color: var(--accent); }
+        .mag-nav span {
+            color: var(--accent); font-family: 'Roboto Mono', monospace; font-size: 0.85rem;
+            transform: rotate(-90deg); letter-spacing: 0.3em; white-space: nowrap; user-select: none;
+        }
+        .mag-nav.right span { transform: rotate(90deg); }
+
+        .sidebar {
+            position: fixed; top: 0; left: -380px; width: 380px; height: 100vh;
+            background: rgba(15, 23, 42, 0.95); backdrop-filter: blur(25px);
+            border-right: 2px solid var(--accent);
+            z-index: 3000; transition: left 0.4s cubic-bezier(0.25, 1, 0.5, 1);
+            display: flex; flex-direction: column; padding: 2rem 1.5rem;
+            box-shadow: 20px 0 50px rgba(0,0,0,0.5);
+        }
+        .sidebar.open { left: 0; }
+        .sidebar-close {
+            position: absolute; top: 1.5rem; right: 1.5rem; color: var(--text-dim);
+            cursor: pointer; transition: color 0.3s;
+        }
+        .sidebar-close:hover { color: var(--accent); }
+        .sidebar-header {
+            font-family: 'Outfit', sans-serif; font-weight: 700; color: var(--text-main);
+            font-size: 1.2rem; margin-bottom: 2rem; padding-bottom: 1rem; border-bottom: 1px solid var(--glass-border);
+        }
+        .sidebar-list { display: flex; flex-direction: column; gap: 0.5rem; overflow-y: auto; }
+        .sidebar-item {
+            padding: 0.75rem; border-radius: 8px; cursor: pointer; transition: all 0.3s;
+            display: flex; flex-direction: column; gap: 0.5rem;
+            border: 1px solid transparent; background: rgba(255,255,255,0.02);
+            position: relative;
+        }
+        .sidebar-item:hover { background: var(--accent-soft); border-color: var(--accent); }
+        .sidebar-item.active { background: rgba(0, 242, 255, 0.15); border-left: 4px solid var(--accent); }
+        .thumb-container {
+            width: 100%; aspect-ratio: 16/9; background: var(--bg-deep);
+            border-radius: 4px; overflow: hidden; position: relative;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .sidebar-item-header { display: flex; justify-content: space-between; align-items: center; }
+        .sidebar-item-num { font-family: 'Roboto Mono', monospace; font-size: 0.75rem; color: var(--accent); }
+        .sidebar-item-title { font-size: 0.9rem; color: var(--text-main); line-height: 1.3; }
+
+        .menu-trigger {
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            color: var(--text-dim); transition: color 0.3s;
+        }
+        .menu-trigger:hover { color: var(--accent); }
+
+        .summary-item, .roadmap-item {
+            margin-bottom: 1.5rem;
+            padding: 1.2rem;
+            background: rgba(255,255,255,0.03);
+            border-radius: 0.8rem;
+            border: 1px solid rgba(255,255,255,0.05);
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: flex-start;
+            gap: 1.2rem;
+        }
+        .summary-item:hover, .roadmap-item:hover {
+            background: rgba(255,255,255,0.08);
+            transform: translateX(10px);
+            border-color: var(--accent);
+        }
+        .summary-item i, .roadmap-item i {
+            color: var(--accent);
+            flex-shrink: 0;
+            margin-top: 4px;
+            width: 1.6rem !important;
+            height: 1.6rem !important;
+        }
+
+        .roadmap-item i {
+            animation: pulse-rocket 2s infinite ease-in-out;
+        }
+
+        .analytical-panel.panel-condensed {
+            font-size: 1.1rem;
+        }
+        .analytical-panel.panel-condensed .list-text {
+            line-height: 1.4;
+        }
+
+        .analytical-panel.panel-tight {
+            font-size: 0.95rem;
+        }
+        .analytical-panel.panel-tight .list-text {
+            line-height: 1.3;
+        }
+
+        @keyframes pulse-rocket {
+            0% { transform: scale(1); filter: drop-shadow(0 0 5px var(--accent)); }
+            50% { transform: scale(1.1); filter: drop-shadow(0 0 15px var(--accent)); }
+            100% { transform: scale(1); filter: drop-shadow(0 0 5px var(--accent)); }
+        }
+        .rocket-glow {
+            position: absolute;
+            width: 200px;
+            height: 200px;
+            background: radial-gradient(circle, var(--accent-soft) 0%, transparent 70%);
+            z-index: -1;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="bg-element bg-1"></div>
+    <div class="bg-element bg-2"></div>
+
+    <div class="hud-status">
+        <div class="menu-trigger" id="menuTrigger" title="Открыть оглавление"><i data-lucide="menu" style="width: 18px; height: 18px;"></i></div>
+        <div class="hud-dot" style="margin-left: 8px;"></div>
+    </div>
+    <div class="hud-progress-container"><div class="hud-progress-bar" id="hudProgress"></div></div>
+    <div class="hud-corners">
+        <div class="corner topleft"></div><div class="corner topright"></div>
+        <div class="corner bottomleft"></div><div class="corner bottomright"></div>
+    </div>
+    <div class="mag-nav left" id="magPrev"><span>// ПРЕДЫДУЩИЙ</span></div>
+    <div class="mag-nav right" id="magNext"><span>// СЛЕДУЮЩИЙ</span></div>
+
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-close" id="sidebarClose"><i data-lucide="x"></i></div>
+        <div class="sidebar-header"><i data-lucide="layers" style="width: 20px; vertical-align: middle; margin-right: 8px;"></i>Оглавление</div>
+        <div class="sidebar-list" id="sidebarList">
+        </div>
+    </aside>
+
+    <div class="presentation" id="presentation">
+    <!-- SLIDES_START -->"""
+
+
+BASE_HTML_TAIL = """
+    <!-- SLIDES_END -->
+    </div>
+
+    <div class="lightbox" id="lightbox">
+        <div class="lightbox-content">
+            <img src="" alt="Full view" class="lightbox-img" id="lightboxImg">
+        </div>
+    </div>
+
+    <script>
+        // Add JS detection class
+        document.documentElement.classList.add('js');
+        
+        // Guard lucide
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons();
+        }
+        
+        let currentSlide = 0;
+        const presentation = document.getElementById('presentation');
+        const totalSlides = presentation ? presentation.querySelectorAll('.slide').length : 0;
+
+        function updateNavigation() {
+            if (!presentation) return;
+            presentation.style.transform = `translateX(-${currentSlide * 100}vw)`;
+            document.querySelectorAll('.sidebar-item').forEach((item, index) => {
+                if (index === currentSlide) item.classList.add('active');
+                else item.classList.remove('active');
+            });
+            const progress = ((currentSlide + 1) / totalSlides) * 100;
+            const hudBar = document.getElementById('hudProgress');
+            if (hudBar) hudBar.style.width = progress + '%';
+            const btnPrev = document.getElementById('magPrev');
+            const btnNext = document.getElementById('magNext');
+            if(btnPrev) btnPrev.style.display = currentSlide === 0 ? 'none' : 'flex';
+            if(btnNext) btnNext.style.display = currentSlide === totalSlides - 1 ? 'none' : 'flex';
+
+            const activeSlideItems = presentation.querySelectorAll('.slide')[currentSlide].querySelectorAll('.animate-up');
+            if (activeSlideItems.length === 0) return;
+            
+            if (typeof gsap !== 'undefined') {
+                gsap.fromTo(activeSlideItems,
+                    { opacity: 0, y: 30 },
+                    { opacity: 1, y: 0, duration: 0.8, stagger: 0.2, ease: "power2.out" }
+                );
+            } else {
+                activeSlideItems.forEach(el => {
+                    el.style.opacity = '1';
+                    el.style.transform = 'none';
+                });
+                document.body.classList.add('js-fallback');
+            }
+        }
+
+        // Fallback timeout
+        setTimeout(() => {
+            if (typeof gsap === 'undefined' && !document.body.classList.contains('js-fallback')) {
+                document.querySelectorAll('.animate-up').forEach(el => {
+                    el.style.opacity = '1';
+                    el.style.transform = 'none';
+                });
+                document.body.classList.add('js-fallback');
+                console.log('[Fallback] GSAP not loaded, showing content');
+            }
+        }, 2000);
+
+        const mP = document.getElementById('magPrev');
+        const mN = document.getElementById('magNext');
+        if(mP) mP.addEventListener('click', () => { if (currentSlide > 0) { currentSlide--; updateNavigation(); } });
+        if(mN) mN.addEventListener('click', () => { if (currentSlide < totalSlides - 1) { currentSlide++; updateNavigation(); } });
+
+        const slides = presentation ? presentation.querySelectorAll('.slide') : [];
+        const sidebarList = document.getElementById('sidebarList');
+        slides.forEach((slide, index) => {
+            let titleEl = slide.querySelector('.slide-title');
+            let headingEl = slide.querySelector('.main-heading');
+            let titleText = "Слайд " + (index + 1);
+            if (titleEl && titleEl.innerText) {
+                titleText = titleEl.innerText;
+            } else if (headingEl && headingEl.innerText) {
+                titleText = "Главный титул";
+            }
+            const item = document.createElement('div');
+            item.className = 'sidebar-item';
+            item.innerHTML = `
+                <div class="sidebar-item-header">
+                    <span class="sidebar-item-num">0${index+1} / 0${slides.length}</span>
+                    <span class="sidebar-item-title">${titleText}</span>
+                </div>
+                <div class="thumb-container" id="thumb-container-${index}"></div>
+            `;
+            item.addEventListener('click', () => {
+                currentSlide = index;
+                updateNavigation();
+            });
+            sidebarList.appendChild(item);
+
+            setTimeout(() => {
+                const tContainer = document.getElementById(`thumb-container-${index}`);
+                if (!tContainer) return;
+                const clone = slide.cloneNode(true);
+                clone.removeAttribute('id');
+                clone.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
+                clone.style.width = '1920px';
+                clone.style.height = '1080px';
+                clone.style.position = 'absolute';
+                clone.style.top = '0';
+                clone.style.left = '0';
+                clone.style.display = 'flex';
+                clone.style.padding = '4rem 8rem';
+                const scale = tContainer.clientWidth / 1920;
+                clone.style.transform = `scale(${scale})`;
+                clone.style.transformOrigin = 'top left';
+                clone.style.pointerEvents = 'none';
+                clone.querySelectorAll('.animate-up').forEach(el => {
+                    el.style.opacity = '1';
+                    el.style.transform = 'none';
+                    el.style.clipPath = 'none';
+                });
+                tContainer.appendChild(clone);
+            }, 100);
+        });
+
+        const sidebar = document.getElementById('sidebar');
+        const menuTrigger = document.getElementById('menuTrigger');
+        const sidebarClose = document.getElementById('sidebarClose');
+
+        if (menuTrigger && sidebar) menuTrigger.addEventListener('click', () => { sidebar.classList.add('open'); });
+        if (sidebarClose && sidebar) sidebarClose.addEventListener('click', () => { sidebar.classList.remove('open'); });
+
+        // Call immediately since script is at end of body, DOM is ready
+        updateNavigation();
+        
+        // Initialize Lucide icons when library is ready (deferred load)
+        (function initLucide() {
+            if (typeof lucide !== 'undefined') {
+                lucide.createIcons();
+            } else {
+                setTimeout(initLucide, 100);
+            }
+        })();
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight' && currentSlide < totalSlides - 1) { currentSlide++; updateNavigation(); }
+            if (e.key === 'ArrowLeft' && currentSlide > 0) { currentSlide--; updateNavigation(); }
+            if (e.key === 'Escape') closeLightbox();
+        });
+
+        const lightbox = document.getElementById('lightbox');
+        const lightboxImg = document.getElementById('lightboxImg');
+
+        if (lightbox && lightboxImg) {
+            document.querySelectorAll('.viz-box').forEach(box => {
+                box.addEventListener('click', () => {
+                    const img = box.querySelector('img');
+                    if (img) {
+                        lightboxImg.src = img.src;
+                        lightbox.style.display = 'flex';
+                        if (typeof gsap !== 'undefined') {
+                            gsap.to(lightbox, { opacity: 1, duration: 0.4, ease: "power2.out" });
+                            gsap.fromTo('.lightbox-content',
+                                { scale: 0.8, y: 50 },
+                                { scale: 1, y: 0, duration: 0.5, ease: "back.out(1.7)" }
+                            );
+                        } else {
+                            lightbox.style.opacity = 1;
+                        }
+                    }
+                });
+            });
+
+            function closeLightbox() {
+                if (lightbox.style.display === 'flex') {
+                    if (typeof gsap !== 'undefined') {
+                        gsap.to(lightbox, {
+                            opacity: 0,
+                            duration: 0.3,
+                            onComplete: () => { lightbox.style.display = 'none'; }
+                        });
+                    } else {
+                        lightbox.style.display = 'none';
+                    }
+                }
+            }
+
+            lightboxImg.addEventListener('click', closeLightbox);
+            lightbox.addEventListener('click', (e) => {
+                if (e.target === lightbox) closeLightbox();
+            });
+        }
+    </script>
+</body>
+</html>
+"""
+
+
+def esc(s: str) -> str:
+    """Экранирует строку для безопасного вставки в HTML."""
+    return html.escape(str(s), quote=True)
+
+
+def clean_text(text: str) -> str:
+    """Нормализует текст: заменяет неразрывные пробелы, убирает лишние пробелы."""
+    if not text:
+        return ""
+    # Заменяем неразрывный пробел на обычный
+    text = text.replace("\xa0", " ")
+    # Заменяем Wingdings bullets (U+F03E и подобные) на обычный bullet или удаляем
+    text = re.sub(r"[\uf0b0-\uf0ff]", "", text)  # Private Use Area bullets
+    # Collapse multiple spaces
+    text = re.sub(r" +", " ", text)
+    return text.strip()
+
+
+class LLMCache:
+    """Простой кэш для ответов LLM на основе файловой системы."""
+
+    def __init__(self, cache_dir: str = None):
+        self.cache_dir = Path(cache_dir) if cache_dir else BASE_DIR / ".cache" / "llm"
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def get(self, prompt: str, model: str) -> str | None:
+        key = hashlib.sha256(f"{model}:{prompt}".encode()).hexdigest()
+        path = self.cache_dir / f"{key}.json"
+        if path.exists():
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    age_days = (time.time() - data.get("ts", 0)) / 86400
+                    if age_days < 30:
+                        return data.get("response")
+            except Exception as e:
+                logger.warning(f"Ошибка чтения кэша LLM: {e}")
+        return None
+
+    def set(self, prompt: str, model: str, response: str):
+        key = hashlib.sha256(f"{model}:{prompt}".encode()).hexdigest()
+        path = self.cache_dir / f"{key}.json"
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "prompt": prompt,
+                        "model": model,
+                        "response": response,
+                        "ts": time.time(),
+                    },
+                    f,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+        except Exception as e:
+            logger.error(f"Ошибка сохранения кэша LLM: {e}")
+
+
+# ==============================================================================
+# БЛОК КОНСТАНТ ОФОРМЛЕНИЯ (DESIGN CONSTANTS)
+# ==============================================================================
+DESIGN_CONFIG = {
+    "icon_size": "1.6rem",  # Relative size for regular list item icons
+    "bullet_lists": {
+        "enabled": True,
+        "icon_map": {
+            "•": "chevron-right",
+            "◦": "chevron-right",
+            "▪": "square",
+            "-": "chevron-right",
+            "–": "chevron-right",
+            "—": "chevron-right",
+            "*": "star",
+            "": "chevron-right",
+            "·": "dot",
+            "": "chevron-right",
+            "ü": "check",
+        },
+        "icon_size": "1.6rem",
+        "indent": "2rem",
+        "border_left": "2px solid rgba(0, 242, 255, 0.15)",
+        "background": "rgba(0, 242, 255, 0.03)",
+    },
+    "grid": {
+        "max_columns": 4, # Максимальное число колонок в сетке изображений
+        "col_span_threshold": 1.2,  # aspect >= 1.2 → занимает 2 колонки
+        "row_span_threshold": 0.833, # aspect <= 0.833 → занимает 2 строки
+        "fallback_min_col_width": "200px",
+    },
+    "caption_search": {
+        "vertical_range_mm": 25, # Диапазон поиска подписей вокруг картинки (мм)
+        "max_gap_mm": 20,         # Максимальный зазор до подписи
+        "horizontal_overlap_ratio": 0.6,
+        "overlap_tolerance": 0.4,
+        "priority": "above",     # Приоритетное расположение подписи: сверху
+    },
+    "formula": {
+        "mathjax_path": "libs/mathjax/tex-mml-chtml.js", # Путь к локальному MathJax
+        "fallback_font": "Roboto Mono",
+        "fallback_font_size": "0.9em",
+    },
+    "layout": {
+        "caption_height_px": 50,  # Резерв высоты под заголовок рисунка внутри Grid-ячейки
+        "text_panel_ratio": 0.35, # Стандартная пропорция ширины текстовой панели
+    },
+    "paths": {
+        "logo_white": "logo/white.png",
+        "media_output": "media/smart_present",
+        "media_output_full": str(BASE_DIR / "web_demo" / "media" / "smart_present"),
+    },
+    "icon_mapping": {
+        # Маппинг ключевых слов на иконки Lucide
+        "activity": ["динамика", "поле", "процесс", "геодинамика"],
+        "droplet": ["нефть", "жидкость", "поток", "вода"],
+        "layers": ["стратиграфия", "пласт", "разрез", "толща", "литология", "фондоформ"],
+        "bar-chart": ["результат", "статистика", "данные", "анализ", "экономика", "итог"],
+        "compass": ["направление", "азимут", "ориентация", "σhmax", "нmax", "тренд"],
+        "target": ["цел", "перспектив", "направлен"],
+        "list-todo": ["задач", "план", "постановк", "задан", "roadmap"],
+        "database": ["модел", "сетк", "данн", "3d", "ячеек"],
+        "cpu": ["автоматизац", "алгоритм", "расчет", "abaqus", "внедрен"],
+        "alert-triangle": ["риск", "проблем", "опасност", "вниман", "предупрежден"],
+        "refresh-ccw": ["ппд", "эффективност", "обработк"],
+        "sliders": ["оптимизац", "параметр", "настройк"],
+        "maximize": ["разм", "диаметр", "толщ", "глубин", "высот", "длин", "ширин"],
+        "map-pin": ["регион", "месторожден", "район", "западн", "сибир", "участ"],
+        "tower-control": ["скважин", "скв", "забой", "усть", "ствол"],
+        "test-tube-2": ["испытан", "образц", "эксперимент", "лаборат"],
+        "wrench": ["установк", "инструмент", "аппарат", "датчик", "прибор"],
+        "zap": ["чувствительн", "влиян", "отклик", "эффект", "фактор"],
+        "git-merge": ["нормирова", "приведен", "коррекц", "сопоставл"],
+        "file-check": ["отчет", "регламент", "утвержден", "формат"],
+        "info": ["информ", "инфо", "описан", "сведен", "справоч", "примечан"],
+        "box": ["модель", "коробка", "box"],
+    },
+    "ai_config": {
+        "env_path": str(BASE_DIR / ".env"),
+        "default_model": "google/gemini-flash-1.5",
+    },
+}
+
+
+class PPTConverter:
+    """Конвертер PowerPoint-презентаций в HTML с современным дизайном.
+
+    Attributes:
+        ppt_path: Путь к исходному .pptx файлу.
+        output_html: Путь для выходного HTML.
+        slides_data: Список данных о слайдах.
+        stats: Статистика конвертации.
+    """
+
+    def __init__(self, ppt_path: str, output_html: str):
+        self.ppt_path = ppt_path
+        self.template_path = None  # Не используется, шаблон вшит в код
+        self.output_html = output_html
+        self.slides_data = []
+        self.stats = {
+            "total_slides": 0,
+            "images_ok": 0,
+            "images_fail": 0,
+            "tables": 0,
+            "ole_skipped": 0,
+        }
+
+    def get_icon_by_text(self, text: str) -> str:
+        """Возвращает идентификатор иконки на основе текста (по ключевым словам)."""
+        text = text.lower()
+        for icon, keywords in DESIGN_CONFIG["icon_mapping"].items():
+            if any(kw in text for kw in keywords):
+                return icon
+        return "chevron-right"
+
+    def load_env(self) -> dict:
+        """Загружает переменные окружения из .env файла."""
+        env = {}
+        path = DESIGN_CONFIG["ai_config"]["env_path"]
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if "=" in line and not line.startswith("#"):
+                        k, v = line.split("=", 1)
+                        env[k.strip()] = v.strip().strip('"').strip("'")
+        return env
+
+    def call_ai(self, prompt: str) -> str | None:
+        """Вызывает LLM через OpenRouter API с кэшированием."""
+        env = self.load_env()
+        api_key = env.get("OPENROUTER_API_KEY")
+        model = env.get("MODEL", DESIGN_CONFIG["ai_config"]["default_model"])
+
+        if not api_key:
+            logger.warning("OPENROUTER_API_KEY не найден в .env")
+            return None
+
+        cache = LLMCache()
+        cached = cache.get(prompt, model)
+        if cached:
+            logger.info(f"[LLM] Ответ получен из кэша для prompt: {prompt[:50]}...")
+            return cached
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {"model": model, "messages": [{"role": "user", "content": prompt}]}
+
+        try:
+            response = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers=headers,
+                data=json.dumps(payload),
+                timeout=30,
+            )
+            if response.status_code == 200:
+                result = response.json()
+                content = result["choices"][0]["message"]["content"]
+                cache.set(prompt, model, content)
+                return content
+            else:
+                logger.error(
+                    f"Ошибка API: {response.status_code} - {response.text[:200]}"
+                )
+        except Exception as e:
+            logger.error(f"Исключение при вызове ИИ: {e}")
+        return None
+
+    def process_txt_files(self) -> None:
+        """Обрабатывает вспомогательные текстовые файлы с использованием AI для структурирования."""
+        files = {
+            "Выводы.txt": {
+                "type": "conclusions",
+                "prompt": "Проанализируй текст и извлеки ключевые факты. СТРОГАЯ СТРУКТУРА: 1. Выполненные работы (МАКСИМУМ 6 пунктов): перечисли основные этапы и действия. 2. Результаты (МАКСИМУМ 6 пунктов): перечисли конкретные выводы, достижения и показатели. ПРАВИЛА: - СТРОГО соблюдай хронологический порядок событий. - Текст должен быть максимально сжатым, строгим и технически точным. - Объединяй весь опыт, не пропуская значимых деталей (даты, цифры), но формулируй их крайне емко. - Удали вводные слова, пояснения и 'воду'. ФОРМАТ: Верни только JSON-массив из кратких тезисов (сначала до 6 пунктов по работам, затем до 6 пунктов по результатам). Текст: {content}",
+            },
+            "Направление дальнейших исследований.txt": {
+                "type": "research",
+                "prompt": "Извлеки основные направления дальнейших исследований. ПОРЯДОК: Сначала планируемые действия, затем ожидаемые эффекты и цели. ПРАВИЛА: - Соблюдай логическую и хронологическую последовательность. - Максимально краткий и сухой научный стиль. - Сохрани всю фактологическую базу данных. ФОРМАТ: Верни только JSON-массив строк. Текст: {content}",
+            },
+        }
+
+        for filename, config in files.items():
+            if not os.path.exists(filename):
+                continue
+            logger.info(f"Обработка текстового файла: {filename}")
+            with open(filename, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            items = []
+            ai_used = False
+            api_key = self.load_env().get("OPENROUTER_API_KEY")
+
+            if api_key:
+                prompt = config["prompt"].format(content=content[:8000])
+                ai_response = self.call_ai(prompt)
+                if ai_response:
+                    try:
+                        # Clean markdown code fences if present
+                        cleaned = ai_response.strip()
+                        if cleaned.startswith("```json"):
+                            cleaned = cleaned.split("```json", 1)[1]
+                        if cleaned.startswith("```"):
+                            cleaned = cleaned.split("```", 1)[1]
+                        if "```" in cleaned:
+                            cleaned = cleaned.split("```", 1)[0]
+                        cleaned = cleaned.strip()
+
+                        parsed = json.loads(cleaned)
+                        if isinstance(parsed, list) and all(
+                            isinstance(x, str) for x in parsed
+                        ):
+                            items = [p.strip() for p in parsed if p.strip()]
+                            ai_used = True
+                            logger.info(
+                                f"[AI] Получено {len(items)} пунктов из {filename}"
+                            )
+                        else:
+                            logger.warning(
+                                f"[AI] Ответ не является массивом строк, используем fallback"
+                            )
+                    except json.JSONDecodeError as e:
+                        logger.warning(
+                            f"[AI] Не удалось распарсить JSON: {e}, используем fallback"
+                        )
+
+            if not items:
+                # Fallback: разбиваем по строкам
+                paragraphs = [p.strip() for p in content.split("\n") if p.strip()]
+                items = paragraphs
+                if not ai_used:
+                    logger.info(
+                        f"[Fallback] Использовано разбиение по строкам для {filename} ({len(items)} пунктов)"
+                    )
+
+            if config["type"] == "conclusions":
+                processed_items = []
+                for item in items:
+                    clean_item = clean_text(item)
+                    icon = self.get_icon_by_text(clean_item)
+                    processed_items.append(
+                        f"<div class='summary-item'><i data-lucide='{icon}'></i> <div class='list-text'>{esc(clean_item)}</div></div>"
+                    )
+
+                mid = (len(processed_items) + 1) // 2
+                left_html = "".join(processed_items[:mid])
+                right_html = "".join(processed_items[mid:])
+
+                self.slides_data.append(
+                    {
+                        "title": "Выводы и результаты этапа",
+                        "layout_type": "conclusions_dual",
+                        "left_html": left_html,
+                        "right_html": right_html,
+                        "plain_text": [],
+                    }
+                )
+            elif config["type"] == "research":
+                items_html = []
+                for item in items:
+                    clean_item = clean_text(item)
+                    items_html.append(
+                        f"<div class='roadmap-item'><i data-lucide='rocket'></i> <div class='list-text'>{esc(clean_item)}</div></div>"
+                    )
+                self.slides_data.append(
+                    {
+                        "title": "Направление дальнейших исследований",
+                        "layout_type": "research_roadmap",
+                        "content_html": "".join(items_html),
+                        "plain_text": [],
+                    }
+                )
+
+    def _save_image_with_white_bg(self, img_blob: bytes, output_path: str) -> bool:
+        """Сохраняет изображение, заменяя прозрачный фон на белый. Возвращает True при успехе."""
+        try:
+            if not img_blob or len(img_blob) == 0:
+                logger.warning(f"Пустой blob изображения, пропускаем {output_path}")
+                return False
+
+            img = Image.open(io.BytesIO(img_blob)).convert("RGBA")
+            white_bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
+            composite = Image.alpha_composite(white_bg, img)
+            composite = composite.convert("RGB")
+            composite.save(output_path, "PNG")
+
+            # Проверяем, что файл создан и не пустой
+            if os.path.getsize(output_path) == 0:
+                logger.warning(f"Файл {output_path} имеет размер 0 байт, удаляем")
+                try:
+                    os.remove(output_path)
+                except Exception:
+                    pass
+                return False
+
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка сохранения {output_path}: {e}")
+            # Удаляем частично созданный файл, если он есть
+            if os.path.exists(output_path):
+                try:
+                    os.remove(output_path)
+                except Exception:
+                    pass
+            return False
+
+    def get_best_layout(self, visuals: list, container_w: float, container_h: float):
+        """
+        Минимизирует пустое пространство для 1-5 рисунков.
+        Для 6-8 рисунков использует фиксированную сетку.
+        Возвращает: (rows, cols, grid_styles)
+        """
+        n = len(visuals)
+        if n == 0: return 1, 1, [], "1fr", "1fr"
+        
+        caption_h = DESIGN_CONFIG["layout"]["caption_height_px"]
+        
+        # 6-8 рисунков: строгая сетка в 2 строки
+        if n >= 6:
+            cols = math.ceil(n / 2)
+            grid_styles = []
+            for i in range(n):
+                r, c = i // cols, i % cols
+                grid_styles.append(f"grid-row: {r+1} / span 1; grid-column: {c+1} / span 1;")
+            col_tmpl = " ".join(["1fr"] * cols)
+            return 2, cols, grid_styles, "1fr 1fr", col_tmpl
+
+        aspects = []
+        for v in visuals:
+            _, _, vw, vh = v["pos"]
+            asp = vw / vh if vh > 0 else 1.33
+            aspects.append(asp)
+
+        # Шаблоны для 1-5 рисунков: (rows, cols, items_layout)
+        templates_n = {
+            1: [(1, 1, [{'r':0, 'c':0, 'rs':1, 'cs':1}])],
+            2: [
+                (1, 2, [{'r':0, 'c':0, 'rs':1, 'cs':1}, {'r':0, 'c':1, 'rs':1, 'cs':1}]), # Колонки
+                (2, 1, [{'r':0, 'c':0, 'rs':1, 'cs':1}, {'r':1, 'c':0, 'rs':1, 'cs':1}]), # Строки
+            ],
+            3: [
+                (1, 3, [{'r':0, 'c':0, 'rs':1, 'cs':1}, {'r':0, 'c':1, 'rs':1, 'cs':1}, {'r':0, 'c':2, 'rs':1, 'cs':1}]), # 3 колонки
+                (2, 2, [{'r':0, 'c':0, 'rs':2, 'cs':1}, {'r':0, 'c':1, 'rs':1, 'cs':1}, {'r':1, 'c':1, 'rs':1, 'cs':1}]), # 1 высокая + 2 справа
+                (2, 2, [{'r':0, 'c':1, 'rs':2, 'cs':1}, {'r':0, 'c':0, 'rs':1, 'cs':1}, {'r':1, 'c':0, 'rs':1, 'cs':1}]), # 1 высокая справа
+                (2, 2, [{'r':0, 'c':0, 'rs':1, 'cs':2}, {'r':1, 'c':0, 'rs':1, 'cs':1}, {'r':1, 'c':1, 'rs':1, 'cs':1}]), # 1 широкая сверху
+            ],
+            4: [
+                (2, 2, [{'r':0, 'c':0, 'rs':1, 'cs':1}, {'r':0, 'c':1, 'rs':1, 'cs':1}, {'r':1, 'c':0, 'rs':1, 'cs':1}, {'r':1, 'c':1, 'rs':1, 'cs':1}]), # 2x2
+                (1, 4, [{'r':0, 'c':0, 'rs':1, 'cs':1}, {'r':0, 'c':1, 'rs':1, 'cs':1}, {'r':0, 'c':2, 'rs':1, 'cs':1}, {'r':0, 'c':3, 'rs':1, 'cs':1}]), # 4 колонки
+            ],
+            5: [
+                (2, 3, [{'r':0, 'c':0, 'rs':2, 'cs':1}, {'r':0, 'c':1, 'rs':1, 'cs':1}, {'r':0, 'c':2, 'rs':1, 'cs':1}, {'r':1, 'c':1, 'rs':1, 'cs':1}, {'r':1, 'c':2, 'rs':1, 'cs':1}]), # 2x3 с 1 высоким
+                (3, 2, [{'r':0, 'c':0, 'rs':1, 'cs':2}, {'r':1, 'c':0, 'rs':1, 'cs':1}, {'r':1, 'c':1, 'rs':1, 'cs':1}, {'r':2, 'c':0, 'rs':1, 'cs':1}, {'r':2, 'c':1, 'rs':1, 'cs':1}]), # 3x2 с 1 широким
+            ]
+        }
+        
+        candidates = templates_n.get(n, [])
+        best_score = -1
+        best_layout = (1, n, [{'r':0, 'c':i, 'rs':1, 'cs':1} for i in range(n)]) # fallback
+        
+        for rows, cols, items in candidates:
+            cell_w = container_w / cols
+            cell_h = container_h / rows
+            current_total_area = 0
+            
+            for i, item in enumerate(items):
+                cw = cell_w * item['cs']
+                ch = cell_h * item['rs']
+                img_ch = ch - caption_h
+                if img_ch <= 0: continue
+                
+                asp = aspects[i]
+                scale = min(cw / asp, img_ch)
+                current_total_area += (scale * asp) * scale
+            
+            if current_total_area > best_score:
+                best_score = current_total_area
+                best_layout = (rows, cols, items)
+        
+        # Calculate weighted grid templates
+        r_res, c_res, i_res = best_layout
+        grid_styles = []
+        for item in i_res:
+            style = f"grid-row: {item['r']+1} / span {item['rs']}; grid-column: {item['c']+1} / span {item['cs']};"
+            grid_styles.append(style)
+            
+        # Heuristic for column/row weights
+        col_weights = ["1fr"] * c_res
+        row_weights = ["1fr"] * r_res
+        
+        if n == 2 and c_res == 2:
+            a1, a2 = aspects[0], aspects[1]
+            if a1 < 0.7 or a2 < 0.7:
+                w1 = max(0.6, min(1.4, a1))
+                w2 = max(0.6, min(1.4, a2))
+                col_weights = [f"{w1:.1f}fr", f"{w2:.1f}fr"]
+        elif n == 3 and c_res == 3:
+            w = [max(0.7, min(1.3, a)) for a in aspects]
+            col_weights = [f"{v:.1f}fr" for v in w]
+            
+        return r_res, c_res, grid_styles, " ".join(row_weights), " ".join(col_weights)
+
+    def _is_slide_number(self, text: str) -> bool:
+        """Проверяет, является ли текст номером слайда (например, "3" или "3/10")."""
+        if re.match(r"^\d+$", text.strip()):
+            return True
+        if re.match(r"^\d+\s*/\s*\d+$", text.strip()):
+            return True
+        return False
+
+    def _split_text_into_items(self, text: str) -> list:
+        """Разбирает многострочный текст на отдельные пункты.
+        Возвращает список dict: [{"text": str, "is_bullet": bool, "bullet_char": str|None, "level": int}]
+        Префиксы списков (цифры, bullets, дефисы) удаляются из текста, но тип маркера запоминается.
+        """
+        if not text:
+            return []
+        lines = text.split("\n")
+        items = []
+        # Символы маркера из конфига (ключи словаря)
+        bullet_chars = set(
+            DESIGN_CONFIG.get("bullet_lists", {}).get("icon_map", {}).keys()
+        )
+        # Расширенный паттерн для удаления префиксов: цифры с точками, bullets, дефисы
+        # Исключаем буквы из длинных слов ([a-zA-Zа-яА-Я]+), оставляя только одиночные буквы-маркеры (a., B., а.)
+        prefix_pattern = r"^\s*(\d+[\.\)]\s*|[a-zа-я][\.\)]\s*|[•◦▪\-–—*·ü]\s*)+\s*"
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            first_char = stripped[0]
+            # КОРРЕКЦИЯ: Более гибкое определение списков (любая нумерация или пунктировка)
+            is_bullet = (
+                (first_char in bullet_chars) or 
+                bool(re.match(r"^\s*(\d+[\.\)]|[a-zA-Zа-яА-Я][\.\)]|\([\d\w]\))\s*", stripped)) or
+                bool(re.match(r"^\s*[IVXLCDMivxlcdm]+\.\s*", stripped))
+            )
+            
+            cleaned = re.sub(prefix_pattern, "", stripped).strip()
+            if cleaned:
+                items.append(
+                    {
+                        "text": cleaned,
+                        "is_bullet": is_bullet,
+                        "bullet_char": first_char if is_bullet else None,
+                        "level": 0,
+                    }
+                )
+        return items
+
+    def _extract_captions_from_shapes(self, slide, slide_info: dict) -> None:
+        """Извлекает подписи к изображениям из текстовых блоков.
+        Поиск сначала выполняется над изображением (priority=above), если не найдено —
+        выполняется fallback поиск под изображением.
+        Выбранный в качестве подписи текст исключается из общего списка plain_text.
+        """
+        cfg = DESIGN_CONFIG.get("caption_search", {})
+        vert_range_mm = cfg.get("vertical_range_mm", 15)
+        max_gap_mm = cfg.get("max_gap_mm", 10)
+        horiz_ratio = cfg.get("horizontal_overlap_ratio", 0.4)
+        overlap_tol = cfg.get("overlap_tolerance", 0.5)
+        priority = cfg.get("priority", "above")
+        vert_range_emu = int(vert_range_mm * 36000)
+        max_gap_emu = int(max_gap_mm * 36000)
+
+        slide_num = slide_info.get("slide_num", "?")
+        text_shapes_with_pos = []
+        for shape in slide.shapes:
+            if shape.has_text_frame and shape != slide.shapes.title:
+                txt = shape.text.strip()
+                if txt and not self._is_slide_number(txt) and len(txt) < 250:
+                    text_shapes_with_pos.append(
+                        {
+                            "text": txt,
+                            "left": shape.left,
+                            "top": shape.top,
+                            "width": shape.width,
+                            "height": shape.height,
+                        }
+                    )
+
+        used_texts = set()
+        for vis in slide_info["visuals"]:
+            v_left, v_top, v_w, v_h = vis["pos"]
+            v_center_x = v_left + v_w / 2
+            best_match = None
+            best_score = 0.0
+            second_best_score = 0.0
+
+            # --- Pass 1: search ABOVE image ---
+            search_top = v_top - vert_range_emu
+
+            for ts in text_shapes_with_pos:
+                if ts["text"] in used_texts:
+                    continue
+                ts_top = ts["top"]
+                ts_bottom = ts["top"] + ts["height"]
+                ts_center_x = ts["left"] + ts["width"] / 2
+                ts_h = ts["height"]
+
+                # Too high
+                if ts_bottom < search_top:
+                    continue
+
+                v_gap = v_top - ts_bottom
+                abs_gap = abs(v_gap)
+                if abs_gap > max_gap_emu:
+                    continue
+
+                # Overlap handling
+                if v_gap < 0:
+                    if ts_h > 0:
+                        overlap_above = (v_top - ts_top) / ts_h
+                        if overlap_above < overlap_tol:
+                            continue
+                    else:
+                        continue
+
+                # Horizontal matching
+                h_offset = abs(ts_center_x - v_center_x)
+                if h_offset > v_w * horiz_ratio:
+                    continue
+                # h_score: denominator fixed 0.5 per plan
+                h_thresh_score = v_w * 0.5 if v_w > 0 else 1
+                h_score = max(0.0, 1.0 - (h_offset / h_thresh_score))
+
+                # v_score
+                v_score = (
+                    max(0.0, 1.0 - (abs_gap / max_gap_emu)) if max_gap_emu > 0 else 0.0
+                )
+
+                total_score = 0.7 * v_score + 0.3 * h_score
+
+                if total_score > best_score:
+                    second_best_score = best_score
+                    best_score = total_score
+                    best_match = ts
+                elif total_score > second_best_score:
+                    second_best_score = total_score
+
+            # --- Pass 2: fallback BELOW image ---
+            if priority == "above" and (best_match is None or best_score <= 0.6):
+                v_bottom = v_top + v_h
+                for ts in text_shapes_with_pos:
+                    if ts["text"] in used_texts:
+                        continue
+                    ts_top = ts["top"]
+                    ts_center_x = ts["left"] + ts["width"] / 2
+
+                    # Horizontal check
+                    h_offset = abs(ts_center_x - v_center_x)
+                    if h_offset > v_w * horiz_ratio:
+                        continue
+
+                    # Text must start at or below image bottom, within max_gap
+                    v_gap_below = ts_top - v_bottom
+                    if v_gap_below < 0 or v_gap_below > max_gap_emu:
+                        continue
+
+                    # Scores
+                    v_score = (
+                        max(0.0, 1.0 - (v_gap_below / max_gap_emu))
+                        if max_gap_emu > 0
+                        else 0.0
+                    )
+                    h_thresh_score = v_w * 0.5 if v_w > 0 else 1
+                    h_score = max(0.0, 1.0 - (h_offset / h_thresh_score))
+                    total_score = 0.7 * v_score + 0.3 * h_score
+
+                    if total_score > best_score:
+                        second_best_score = best_score
+                        best_score = total_score
+                        best_match = ts
+                    elif total_score > second_best_score:
+                        second_best_score = total_score
+
+            if best_match and best_score > 0.6:
+                vis["caption"] = best_match["text"]
+                used_texts.add(best_match["text"])
+                
+                # КОРРЕКЦИЯ: Надежная фильтрация через нормализацию пробелов
+                def normalize(s: str) -> str:
+                    return " ".join(s.split()).strip().lower()
+                
+                target = normalize(best_match["text"])
+                
+                new_plain_text = []
+                for p in slide_info["plain_text"]:
+                    # Считаем текст самого параграфа
+                    p_text = normalize("".join(s for s in p if not s.startswith("\0")))
+                    if p_text != target:
+                        new_plain_text.append(p)
+                slide_info["plain_text"] = new_plain_text
+                if best_score - second_best_score < 0.1 and second_best_score > 0:
+                    logger.warning(
+                        f"Slide {slide_num}: ambiguous caption (score diff {best_score - second_best_score:.3f})"
+                    )
+            else:
+                logger.warning(
+                    f"Slide {slide_num}: caption not found for visual at (x={v_left}, y={v_top})"
+                )
+
+    def _omml_to_mathml(self, omath_elem) -> str:
+        """Рекурсивно конвертирует OMML элемент в MathML строку.
+        Поддерживает основные теги: m:r, m:t, m:sSub, m:sSup, m:sSubSup, m:f, m:nary, m:acc, m:e.
+        Возвращает строку MathML или пустую строку при ошибке.
+        """
+
+        # Helper: determine token type from text
+        def token_type(txt: str) -> str:
+            if txt.isdigit():
+                return "mn"
+            # operators set
+            ops = set("+-*/=<>≤≥≈≡∑∏∫∂∇±×÷∈∉⊂⊃∪∩∧∨¬∞∂")
+            if txt in ops:
+                return "mo"
+            return "mi"
+
+        # Recursive conversion
+        def convert(elem) -> str:
+            tag = elem.tag
+            if tag == f"{OMML_NS}oMath" or tag == f"{OMML_NS}oMathPara":
+                # Root: wrap everything in <math>
+                children = "".join(convert(c) for c in elem)
+                return f'<math xmlns="http://www.w3.org/1998/Math/MathML">{children}</math>'
+            elif tag == f"{OMML_NS}r":
+                # Run: contains m:t (text) and possibly formatting
+                children = list(elem)
+                if children:
+                    # Concatenate all text children
+                    texts = []
+                    for c in children:
+                        if c.tag == f"{OMML_NS}t":
+                            texts.append(c.text or "")
+                        # Could handle m:br etc.
+                    txt = "".join(texts)
+                    if txt:
+                        return (
+                            f"<{token_type(txt)}>{html.escape(txt)}</{token_type(txt)}>"
+                        )
+                return ""
+            elif tag == f"{OMML_NS}t":
+                # Text node: rarely direct child except inside r; handled above
+                return html.escape(elem.text or "")
+            elif tag == f"{OMML_NS}sSub":
+                # Subscript: <msub><m:ei/></msub>
+                children = list(elem)
+                base = ""
+                sub = ""
+                for c in children:
+                    if c.tag == f"{OMML_NS}e":
+                        base = convert(c)
+                    elif c.tag == f"{OMML_NS}sub":
+                        sub = convert(c)
+                return f"<msub>{base}{sub}</msub>"
+            elif tag == f"{OMML_NS}sSup":
+                children = list(elem)
+                base = ""
+                sup = ""
+                for c in children:
+                    if c.tag == f"{OMML_NS}e":
+                        base = convert(c)
+                    elif c.tag == f"{OMML_NS}sup":
+                        sup = convert(c)
+                return f"<msup>{base}{sup}</msup>"
+            elif tag == f"{OMML_NS}sSubSup":
+                children = list(elem)
+                base = ""
+                sub = ""
+                sup = ""
+                for c in children:
+                    if c.tag == f"{OMML_NS}e":
+                        base = convert(c)
+                    elif c.tag == f"{OMML_NS}sub":
+                        sub = convert(c)
+                    elif c.tag == f"{OMML_NS}sup":
+                        sup = convert(c)
+                return f"<msubsup>{base}{sub}{sup}</msubsup>"
+            elif tag == f"{OMML_NS}f":
+                # Fraction: numerator and denominator
+                num, den = "", ""
+                for c in elem:
+                    if c.tag == f"{OMML_NS}num":
+                        num = convert(c)
+                    elif c.tag == f"{OMML_NS}den":
+                        den = convert(c)
+                return f"<mfrac>{num}{den}</mfrac>"
+            elif tag == f"{OMML_NS}nary":
+                # N-ary operator (sum, product, integral)
+                # Structure: <m:nary><m:chr>∑</m:chr><m:lim>...</m:lim><m:e>...</m:e></m:nary>
+                op = ""
+                sub = ""
+                sup = ""
+                elem_content = ""
+                for c in elem:
+                    if c.tag == f"{OMML_NS}chr":
+                        op = html.escape(c.text or "∑")
+                    elif c.tag == f"{OMML_NS}lim":
+                        # lim contains sub and sup
+                        for l in c:
+                            if l.tag == f"{OMML_NS}sub":
+                                sub = convert(l)
+                            elif l.tag == f"{OMML_NS}sup":
+                                sup = convert(l)
+                    elif c.tag == f"{OMML_NS}e":
+                        elem_content = convert(c)
+                # Render as <munderover><mo>op</mo>sub sup</munderover>elem
+                if sub or sup:
+                    return f"<munderover><mo>{op}</mo>{sub}{sup}</munderover>{elem_content}"
+                else:
+                    return f"<mn>{op}</mn>{elem_content}"
+            elif tag == f"{OMML_NS}acc":
+                # Accent (hat, bar, etc.)
+                # <m:acc><m:chr>^</m:chr><m:e>...</m:e></m:acc>
+                acc_char = ""
+                elem_content = ""
+                for c in elem:
+                    if c.tag == f"{OMML_NS}chr":
+                        acc_char = html.escape(c.text or "")
+                    elif c.tag == f"{OMML_NS}e":
+                        elem_content = convert(c)
+                return f"<mover>{elem_content}<mo>{acc_char}</mo></mover>"
+            elif tag == f"{OMML_NS}d":
+                # Delimiter: <m:d><m:dPr><m:begChr>(</m:begChr><m:endChr>)</m:endChr></m:dPr><m:e>...</m:e></m:d>
+                beg, end = "(", ")"
+                dPr = elem.find(f"{OMML_NS}dPr")
+                if dPr is not None:
+                    beg_elem = dPr.find(f"{OMML_NS}begChr")
+                    end_elem = dPr.find(f"{OMML_NS}endChr")
+                    if beg_elem is not None: beg = beg_elem.get(f"{OMML_NS}val", "(")
+                    if end_elem is not None: end = end_elem.get(f"{OMML_NS}val", ")")
+                
+                content = ""
+                for c in elem:
+                    if c.tag == f"{OMML_NS}e":
+                        content = convert(c)
+                return f"<mrow><mo>{html.escape(beg)}</mo>{content}<mo>{html.escape(end)}</mo></mrow>"
+            elif tag == f"{OMML_NS}e":
+                # Element wrapper - just recurse children
+                return "".join(convert(c) for c in elem)
+            elif tag == f"{OMML_NS}del":
+                # del is often used for deleted content, ignore
+                return ""
+            elif tag == f"{OMML_NS}lim":
+                # Limits (sub/sup)
+                sub, sup = "", ""
+                for c in elem:
+                    if c.tag == f"{OMML_NS}sub":
+                        sub = convert(c)
+                    elif c.tag == f"{OMML_NS}sup":
+                        sup = convert(c)
+                return f"<msubsup>{sub}{sup}</msubsup>"
+            # Add more as needed
+            # For unknown tags, attempt to process children
+            return "".join(convert(c) for c in elem)
+
+        try:
+            return convert(omath_elem)
+        except Exception as e:
+            logger.warning(f"OMML→MathML conversion error: {e}")
+            return ""
+
+    def _extract_math_segments_from_textframe(self, text_frame) -> list[str]:
+        """Извлекает сегменты текста и отдельные формулы (OMML) из текстового фрейма.
+        Возвращает список: обычные строки (текст) или спец-маркеры.
+        """
+        NS = {
+            "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+            "a14": "http://schemas.microsoft.com/office/drawing/2014/main",
+            "m": "http://schemas.openxmlformats.org/officeDocument/2006/math",
+            "mc": "http://schemas.openxmlformats.org/markup-compatibility/2006",
+        }
+        all_paragraphs = []
+        for para in text_frame.paragraphs:
+            # --- НОВОЕ: Обнаружение буллитов из свойств абзаца PPTX ---
+            # Большинство буллитов в PPTX не являются символами в тексте
+            is_legal_bullet = False
+            if para.level > 0:
+                is_legal_bullet = True
+            else:
+                # Проверка XML свойств pPr на наличие буллитов (buChar, buAutoNum и др.)
+                pPr = para._element.pPr
+                if pPr is not None:
+                    has_bu = any(child.tag.endswith(('buChar', 'buAutoNum', 'buBlip', 'buBullet')) 
+                                for child in pPr)
+                    if has_bu:
+                        is_legal_bullet = True
+            
+            p_elem = para._element
+            segments = []
+            current_text = []
+
+            for child in p_elem:
+                local = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+                if local == "r":
+                    # Check for formula
+                    omath = child.find(".//m:oMath", NS) or child.find(".//m:oMathPara", NS)
+                    if omath is None:
+                        omath = child.find(".//mc:AlternateContent/mc:Choice//m:oMath", NS) or \
+                                child.find(".//mc:AlternateContent/mc:Choice//m:oMathPara", NS)
+                    
+                    if omath is not None:
+                        if current_text:
+                            segments.append("".join(current_text))
+                            current_text = []
+                        mathml = self._omml_to_mathml(omath)
+                        if mathml:
+                            segments.append(f"\0MATHML_BEGIN\0{mathml}\0MATHML_END\0")
+                        else:
+                            linear_parts = [t.text for t in omath.findall(".//m:t", NS) if t.text]
+                            linear_text = "".join(linear_parts)
+                            if linear_text:
+                                segments.append(f"\0FORMULA_FALLBACK\0{linear_text}\0END\0")
+                        continue
+
+                    # Regular text
+                    t_elems = child.findall(".//a:t", NS)
+                    txt = "".join(t.text or "" for t in t_elems)
+                    if txt:
+                        current_text.append(txt)
+                elif local == "br":
+                    current_text.append("\n")
+                else:
+                    omath = None
+                    if child.tag.endswith("}oMath") or child.tag.endswith("}oMathPara"):
+                        omath = child
+                    else:
+                        omath = child.find(".//m:oMath", NS) or child.find(".//m:oMathPara", NS)
+                        if omath is None:
+                            omath = child.find(".//mc:AlternateContent/mc:Choice//m:oMath", NS) or \
+                                    child.find(".//mc:AlternateContent/mc:Choice//m:oMathPara", NS)
+                    
+                    if omath is not None:
+                        if current_text:
+                            segments.append("".join(current_text))
+                            current_text = []
+                        mathml = self._omml_to_mathml(omath)
+                        if mathml:
+                            segments.append(f"\0MATHML_BEGIN\0{mathml}\0MATHML_END\0")
+                        else:
+                            linear_parts = [t.text for t in omath.findall(".//m:t", NS) if t.text]
+                            linear_text = "".join(linear_parts)
+                            if linear_text:
+                                segments.append(f"\0FORMULA_FALLBACK\0{linear_text}\0END\0")
+
+            if current_text:
+                segments.append("".join(current_text))
+            
+            # --- НОВОЕ: Внедрение маркера, если это свойство абзаца (согласно плану) ---
+            if sequences := segments: # use local alias for clarity
+                if is_legal_bullet:
+                    # Проверяем, не начинается ли уже текст с маркера
+                    first_seg = sequences[0]
+                    if not first_seg.startswith("\0"): # Если не формула
+                        bullet_chars = set(DESIGN_CONFIG.get("bullet_lists", {}).get("icon_map", {}).keys())
+                        stripped = first_seg.lstrip()
+                        if not (stripped and stripped[0] in bullet_chars):
+                            sequences[0] = "• " + first_seg
+
+            if segments:
+                all_paragraphs.append(segments)
+        return all_paragraphs
+
+    def _paragraph_to_html(self, paragraph) -> str:
+        """Convert a paragraph (from table cell or shape) to HTML, preserving runs formatting and embedded formulas."""
+        NS = {
+            "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+            "a14": "http://schemas.microsoft.com/office/drawing/2014/main",
+            "m": "http://schemas.openxmlformats.org/officeDocument/2006/math",
+            "mc": "http://schemas.openxmlformats.org/markup-compatibility/2006",
+        }
+        p_elem = paragraph._element
+        parts = []
+        for child in p_elem:
+            local = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+            if local == "r":
+                # Check if this run contains an OMML formula (regular or via mc:AlternateContent)
+                omath = child.find(".//m:oMath", NS) or child.find(".//m:oMathPara", NS)
+                if omath is None:
+                    # Scan deep for AlternateContent
+                    omath = child.find(".//mc:AlternateContent/mc:Choice//m:oMath", NS) or \
+                            child.find(".//mc:AlternateContent/mc:Choice//m:oMathPara", NS)
+                
+                if omath is not None:
+                    mathml = self._omml_to_mathml(omath)
+                    if mathml:
+                        parts.append(
+                            f'<span class="formula-container"><math xmlns="http://www.w3.org/1998/Math/MathML">{mathml}</math></span>'
+                        )
+                    else:
+                        # Fallback: linear Unicode text from OMML
+                        linear_parts = [
+                            t.text for t in omath.findall(".//m:t", NS) if t.text
+                        ]
+                        linear_text = "".join(linear_parts)
+                        if linear_text:
+                            parts.append(
+                                f'<span class="formula-fallback">{html.escape(linear_text)}</span>'
+                            )
+                    continue
+                # Regular text run
+                t_elems = child.findall(".//a:t", NS)
+                txt = "".join(t.text or "" for t in t_elems)
+                if not txt:
+                    continue
+                rPr = child.find(".//a:rPr", NS)
+                sub = False
+                sup = False
+                bold = False
+                italic = False
+                if rPr is not None:
+                    # DrawingML baseline attribute: 30000 = sup, -25000 = sub (approx)
+                    baseline = rPr.get("baseline")
+                    if baseline:
+                        try:
+                            val = int(baseline)
+                            if val > 0: sup = True
+                            elif val < 0: sub = True
+                        except: pass
+                    
+                    # Also check literal attributes if they exist
+                    if not sub: sub = rPr.get("subscript") in ("1", "true", True)
+                    if not sup: sup = rPr.get("superscript") in ("1", "true", True)
+                    
+                    bold = rPr.get("b") in ("1", "true", True)
+                    italic = rPr.get("i") in ("1", "true", True)
+                if sub:
+                    parts.append(f"<sub>{html.escape(txt)}</sub>")
+                elif sup:
+                    parts.append(f"<sup>{html.escape(txt)}</sup>")
+                else:
+                    if bold and italic:
+                        parts.append(f"<strong><em>{html.escape(txt)}</em></strong>")
+                    elif bold:
+                        parts.append(f"<strong>{html.escape(txt)}</strong>")
+                    elif italic:
+                        parts.append(f"<em>{html.escape(txt)}</em>")
+                    else:
+                        parts.append(html.escape(txt))
+            elif local == "br":
+                parts.append("<br/>")
+            elif local in ("endParaRPr", "extLst"):
+                continue
+            else:
+                omath = None
+                if child.tag.endswith("}oMath") or child.tag.endswith("}oMathPara"):
+                    omath = child
+                else:
+                    omath = child.find(".//m:oMath", NS) or child.find(
+                        ".//m:oMathPara", NS
+                    )
+                if omath is not None:
+                    mathml = self._omml_to_mathml(omath)
+                    if mathml:
+                        parts.append(
+                            f'<span class="formula-container"><math xmlns="http://www.w3.org/1998/Math/MathML">{mathml}</math></span>'
+                        )
+                    else:
+                        linear_parts = [
+                            t.text for t in omath.findall(".//m:t", NS) if t.text
+                        ]
+                        linear_text = "".join(linear_parts)
+                        if linear_text:
+                            parts.append(
+                                f'<span class="formula-fallback">{html.escape(linear_text)}</span>'
+                            )
+        return "".join(parts)
+
+    def _table_to_html(self, table) -> str:
+        """Преобразует таблицу из PPTX в HTML с сохранением форматирования (case, sub/sup, bold/italic) и формул."""
+        rows_html = []
+        for row_idx, row in enumerate(table.rows):
+            cells_html = ""
+            for cell in row.cells:
+                # Build cell HTML from all paragraphs
+                cell_parts = []
+                for para in cell.text_frame.paragraphs:
+                    cell_parts.append(self._paragraph_to_html(para))
+                cell_content = " ".join(cell_parts)  # separate paragraphs with space
+                tag = "th" if row_idx == 0 else "td"
+                cells_html += f"<{tag}>{cell_content}</{tag}>"
+            rows_html.append(f"<tr>{cells_html}</tr>")
+        return f'<table class="data-table"><tbody>{"".join(rows_html)}</tbody></table>'
+
+    def _clean_speaker_name(self, name: str) -> tuple[str, str]:
+        """Очищает и разделяет имя докладчика и дополнительную информацию."""
+        name = name.strip()
+        name = re.sub(r"^[Дд]окладчик:\s*", "", name)
+        name = re.sub(r"^[Дд]окладчик\s*[-–—:]\s*", "", name)
+        parts = name.split("\n")
+        if len(parts) >= 2:
+            return parts[0].strip(), "\n".join(parts[1:]).strip()
+        return name, ""
+
+    def extract_content(self) -> None:
+        """Извлекает все данные из PowerPoint-файла в self.slides_data."""
+        logger.info(f"Чтение презентации: {self.ppt_path}")
+        prs = Presentation(self.ppt_path)
+        media_output_full = DESIGN_CONFIG["paths"]["media_output_full"]
+        os.makedirs(media_output_full, exist_ok=True)
+
+        for i, slide in enumerate(prs.slides):
+            slide_info = {
+                "title": "",
+                "layout_type": "default",
+                "plain_text": [],
+                "visuals": [],
+                "tables_html": [],
+                "is_active": True,
+                "slide_num": i + 1,  # for logging
+            }
+
+            if slide.shapes.title:
+                slide_info["title"] = slide.shapes.title.text
+
+            for shape in slide.shapes:
+                if shape.has_text_frame and shape != slide.shapes.title:
+                    # Extract text and formulas using low-level parsing
+                    try:
+                        all_paragraphs = self._extract_math_segments_from_textframe(
+                            shape.text_frame
+                        )
+                        f_count = 0
+                        for para_segs in all_paragraphs:
+                            f_count += sum(1 for s in para_segs if s.startswith("\0MATHML_BEGIN\0"))
+                            slide_info["plain_text"].append(para_segs)
+                        
+                        if f_count:
+                            logger.info(
+                                f"Slide {i + 1}: shape '{shape.name}' → {f_count} formulas"
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            f"Slide {i + 1}: error extracting text/math from shape: {e}"
+                        )
+                        # Fallback to plain text
+                        txt = shape.text.strip()
+                        if txt and not self._is_slide_number(txt):
+                            slide_info["plain_text"].append(txt)
+
+                elif shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
+                    img_name = f"slide_{i + 1}_img_{len(slide_info['visuals']) + 1}.png"
+                    img_path_full = str(Path(media_output_full) / img_name)
+                    img_path_rel = (
+                        f"{DESIGN_CONFIG['paths']['media_output']}/{img_name}"
+                    )
+
+                    try:
+                        try:
+                            blob = shape.image.blob
+                        except ValueError:
+                            if not HAS_LXML:
+                                logger.warning(
+                                    "lxml не установлен, нельзя извлечь SVG. Пропускаем изображение."
+                                )
+                                self.stats["images_fail"] += 1
+                                continue
+
+                            elem = shape._element
+                            svg_blips = elem.findall(
+                                ".//{http://schemas.microsoft.com/office/drawing/2016/SVG/main}svgBlip"
+                            )
+                            if not svg_blips:
+                                logger.warning(
+                                    f"SVG blip не найден для slide {i + 1}, пропускаем"
+                                )
+                                self.stats["images_fail"] += 1
+                                continue
+                            rId = svg_blips[0].get(
+                                "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed"
+                            )
+                            if not rId:
+                                logger.warning(
+                                    f"Нет rId для SVG blip на слайде {i + 1}"
+                                )
+                                self.stats["images_fail"] += 1
+                                continue
+                            rel = slide.part.rels[rId]
+                            part = rel.target_part
+                            svg_blob = part.blob
+                            if not svg_blob or len(svg_blob) == 0:
+                                logger.warning(
+                                    f"Пустой SVG blob на слайде {i + 1}, пропускаем"
+                                )
+                                if os.path.exists(img_path_full):
+                                    try:
+                                        os.remove(img_path_full)
+                                    except Exception:
+                                        pass
+                                self.stats["images_fail"] += 1
+                                continue
+                            svg_path_full = img_path_full.replace(".png", ".svg")
+                            svg_path_rel = img_path_rel.replace(".png", ".svg")
+
+                            try:
+                                import cairosvg
+
+                                cairosvg.svg2png(
+                                    bytestring=svg_blob,
+                                    write_to=img_path_full,
+                                    background_color="white",
+                                )
+                                if (
+                                    os.path.exists(img_path_full)
+                                    and os.path.getsize(img_path_full) > 0
+                                ):
+                                    slide_info["visuals"].append(
+                                        {
+                                            "src": img_path_rel,
+                                            "caption": "",
+                                            "pos": (
+                                                shape.left,
+                                                shape.top,
+                                                shape.width,
+                                                shape.height,
+                                            ),
+                                        }
+                                    )
+                                    self.stats["images_ok"] += 1
+                                    continue
+                                else:
+                                    raise IOError("Converted PNG is empty")
+                            except Exception as svg_err:
+                                logger.warning(
+                                    f"cairosvg не сработал ({svg_err}), сохраняем SVG как есть"
+                                )
+                                if os.path.exists(img_path_full):
+                                    try:
+                                        os.remove(img_path_full)
+                                    except Exception:
+                                        pass
+                                with open(svg_path_full, "wb") as sf:
+                                    sf.write(svg_blob)
+                                slide_info["visuals"].append(
+                                    {
+                                        "src": svg_path_rel,
+                                        "caption": "",
+                                        "pos": (
+                                            shape.left,
+                                            shape.top,
+                                            shape.width,
+                                            shape.height,
+                                        ),
+                                    }
+                                )
+                                self.stats["images_ok"] += 1
+                                continue
+
+                        if not blob or len(blob) == 0:
+                            logger.warning(
+                                f"Пустой blob изображения на слайде {i + 1}, пропускаем"
+                            )
+                            if os.path.exists(img_path_full):
+                                try:
+                                    os.remove(img_path_full)
+                                except Exception:
+                                    pass
+                            self.stats["images_fail"] += 1
+                            continue
+
+                        success = self._save_image_with_white_bg(blob, img_path_full)
+                        if success:
+                            slide_info["visuals"].append(
+                                {
+                                    "src": img_path_rel,
+                                    "caption": "",
+                                    "pos": (
+                                        shape.left,
+                                        shape.top,
+                                        shape.width,
+                                        shape.height,
+                                    ),
+                                }
+                            )
+                            self.stats["images_ok"] += 1
+                        else:
+                            self.stats["images_fail"] += 1
+                    except Exception as e:
+                        logger.error(f"[IMG] Ошибка на слайде {i + 1}: {e}")
+                        self.stats["images_fail"] += 1
+
+                elif shape.has_table:
+                    table_html = self._table_to_html(shape.table)
+                    slide_info["tables_html"].append(table_html)
+                    self.stats["tables"] += 1
+
+                # OLE objects (e.g., embedded equations) are not images; skip with warning
+                elif hasattr(shape, "ole_format") and shape.ole_format is not None:
+                    logger.warning(
+                        f"Slide {i + 1}: OLE object '{shape.name}' skipped (not an image)"
+                    )
+                    self.stats["ole_skipped"] = self.stats.get("ole_skipped", 0) + 1
+
+            if (
+                not slide_info["visuals"]
+                and not slide_info["title"]
+                and not slide_info["tables_html"]
+                and not slide_info["plain_text"]
+            ):
+                logger.debug(f"Слайд {i + 1} пропущен: нет контента")
+                continue
+
+            if i == 0:
+                slide_info["layout_type"] = "intro"
+                slide_info["title"] = ""
+                speaker_name = ""
+                speaker_info = ""
+                remaining = []
+                # DEBUG: логируем plain_text для первого слайда
+                logger.info(f"[DEBUG] Slide 1 plain_text: {slide_info['plain_text']}")
+                for idx, item in enumerate(slide_info["plain_text"]):
+                    # Если это список сегментов (от PPTX), объединяем в строку для метаданных интро
+                    txt = "".join(s for s in item if not s.startswith("\0")) if isinstance(item, list) else str(item)
+                    
+                    if idx == 0:
+                        slide_info["title"] = txt
+                    elif idx == 1:
+                        speaker_name = txt
+                    elif idx == 2:
+                        speaker_info = txt
+                    else:
+                        remaining.append(txt)
+                clean_name, extra_info = self._clean_speaker_name(speaker_name)
+                if extra_info and not speaker_info:
+                    speaker_info = extra_info
+
+                # КОРРЕКЦИЯ: если имя пустое (например, было только "Докладчик"), а в speaker_info есть текст — меняем местами
+                if not clean_name and speaker_info:
+                    possible_name, possible_extra = self._clean_speaker_name(
+                        speaker_info
+                    )
+                    if possible_name:
+                        speaker_name = possible_name
+                        speaker_info = possible_extra or ""
+                        clean_name = possible_name
+
+                # КОРРЕКЦИЯ: если после этого speaker_info пуст, но remaining не пуст — берём первый элемент remaining как должность
+                if not speaker_info and remaining:
+                    speaker_info = remaining[0]
+                    remaining = remaining[1:]
+
+                logger.info(
+                    f"[DEBUG] speaker_name='{speaker_name}', speaker_info='{speaker_info}'"
+                )
+                slide_info["speaker_name"] = speaker_name
+                slide_info["speaker_info"] = speaker_info
+                slide_info["plain_text"] = remaining
+
+            elif len(slide_info["visuals"]) == 2:
+                slide_info["layout_type"] = "two_images"
+            elif len(slide_info["visuals"]) == 0 and not slide_info["tables_html"]:
+                slide_info["layout_type"] = "full_text"
+
+            if slide_info["visuals"]:
+                self._extract_captions_from_shapes(slide, slide_info)
+
+            # Подсчёт и логирование формул для текущего слайда
+            m_count = 0
+            f_count_fallback = 0
+            for item in slide_info["plain_text"]:
+                if isinstance(item, list):
+                    m_count += sum(1 for s in item if s.startswith("\0MATHML_BEGIN\0"))
+                    f_count_fallback += sum(1 for s in item if s.startswith("\0FORMULA_FALLBACK\0"))
+                elif isinstance(item, str):
+                    if item.startswith("\0MATHML_BEGIN\0"): m_count += 1
+                    if item.startswith("\0FORMULA_FALLBACK\0"): f_count_fallback += 1
+            
+            total_f = m_count + f_count_fallback
+            if total_f > 0:
+                logger.info(
+                    f"Slide {slide_info['slide_num']}: {total_f} formulas "
+                    f"(MathML: {m_count}, fallback: {f_count_fallback})"
+                )
+
+            self.slides_data.append(slide_info)
+
+        self.stats["total_slides"] = len(self.slides_data)
+
+    def _generate_section_tag(self, data: dict) -> str:
+        """Генерирует тег секции (например, "Данные", "Результаты") на основе текста."""
+        all_texts = []
+        for p in data["plain_text"]:
+            if isinstance(p, list):
+                all_texts.append(" ".join(s for s in p if not s.startswith("\0")))
+            else:
+                all_texts.append(p)
+        text_combined = " ".join(all_texts).lower()
+        if any(kw in text_combined for kw in ["данные", "таблиц", "исходн"]):
+            return "Данные"
+        if any(kw in text_combined for kw in ["результат", "вывод", "итог"]):
+            return "Результаты"
+        if any(kw in text_combined for kw in ["описание", "метод", "подход"]):
+            return "Описание"
+        if any(kw in text_combined for kw in ["анализ", "исследовани"]):
+            return "Анализ"
+        return "Описание"
+
+    def _format_text_panel(self, plain_text: list, tables_html: list = None) -> str:
+        """Формирует HTML-панель с текстовыми пунктами и таблицами.
+        Поддерживает маркированные списки (bullet) с отдельным стилем и формулы (MathML + fallback).
+        """
+        parts = []
+        bullet_config = DESIGN_CONFIG.get("bullet_lists", {})
+        bullet_icon_map = bullet_config.get("icon_map", {})
+        bullet_icon_size = DESIGN_CONFIG["icon_size"] # Упорядочиваем размер к общему 1.6rem
+        bullet_indent = bullet_config.get("indent", "2rem")
+        bullet_border = bullet_config.get(
+            "border_left", "2px solid rgba(0,242,255,0.15)"
+        )
+        bullet_bg = bullet_config.get("background", "rgba(0,242,255,0.03)")
+
+        # Группировка параграфов для предотвращения дробления на "поля"
+        current_group = []
+        
+        def render_group(group_paragraphs):
+            if not group_paragraphs: return ""
+            # Очищаем текст для поиска иконки по первому параграфу
+            first_txt = re.sub(r'<[^>]+>', '', group_paragraphs[0])
+            icon = self.get_icon_by_text(first_txt)
+            inner_html = "<br/>".join(group_paragraphs)
+            return (
+                f'<div class="list-item">'
+                f'<i data-lucide="{icon}" style="width: {DESIGN_CONFIG["icon_size"]}; height: {DESIGN_CONFIG["icon_size"]};"></i>'
+                f'<div class="list-text">{inner_html}</div></div>'
+            )
+
+        for p in plain_text:
+            paragraph_segments = []
+            if isinstance(p, list):
+                for seg in p:
+                    if seg.startswith("\0MATHML_BEGIN\0"):
+                        mathml = seg[len("\0MATHML_BEGIN\0") : -len("\0MATHML_END\0")]
+                        paragraph_segments.append(f'<span class="formula-container"><math xmlns="http://www.w3.org/1998/Math/MathML">{mathml}</math></span>')
+                    elif seg.startswith("\0FORMULA_FALLBACK\0"):
+                        fb = seg[len("\0FORMULA_FALLBACK\0") : -len("\0END\0")]
+                        paragraph_segments.append(f'<span class="formula-fallback">{esc(fb)}</span>')
+                    else:
+                        paragraph_segments.append(esc(seg))
+            else:
+                paragraph_segments.append(esc(p))
+            
+            full_html = "".join(paragraph_segments)
+            if not full_html.strip(): continue
+
+            clean_search_text = re.sub(r'<[^>]+>', '', full_html)
+            items = self._split_text_into_items(clean_search_text)
+            
+            # Обработка каждого элемента (если параграф был разбит на пункты)
+            for item in items:
+                if item.get("is_bullet"):
+                    # Приоритет тематической иконке - ищем по очищенному тексту
+                    keyword_icon = self.get_icon_by_text(item["text"])
+                    default_bullet = "chevron-right"
+                    
+                    if keyword_icon != default_bullet:
+                        icon = keyword_icon
+                    else:
+                        icon = bullet_icon_map.get(item.get("bullet_char"), "chevron-right")
+                        
+                    parts.append(
+                        f'<div class="list-item-bullet" style="padding-left: {bullet_indent}; border-left: {bullet_border}; background: {bullet_bg};">'
+                        f'<i data-lucide="{icon}" style="width: {bullet_icon_size}; height: {bullet_icon_size}; flex-shrink: 0;"></i>'
+                        f'<div class="list-text">{item["text"]}</div></div>'
+                    )
+                else:
+                    keyword_icon = self.get_icon_by_text(item["text"])
+                    parts.append(
+                        f'<div class="list-item">'
+                        f'<i data-lucide="{keyword_icon}" style="width: {DESIGN_CONFIG["icon_size"]}; height: {DESIGN_CONFIG["icon_size"]}; flex-shrink: 0;"></i>'
+                        f'<div class="list-text">{item["text"]}</div></div>'
+                    )
+
+        if tables_html:
+            for t in tables_html:
+                parts.append(t)
+        return "".join(parts)
+
+    def generate_html(self) -> None:
+        """Генерирует итоговый HTML-файл на основе встроенного шаблона и данных слайдов."""
+        logger.info("Рендеринг HTML...")
+
+        # Используем встроенный шаблон вместо чтения файла
+        head_part = BASE_HTML_TEMPLATE
+        tail_part = BASE_HTML_TAIL
+
+        logo = DESIGN_CONFIG["paths"]["logo_white"]
+        icon_sz = DESIGN_CONFIG["icon_size"]
+
+        slides_content = ""
+        total = len(self.slides_data)
+
+        for idx, data in enumerate(self.slides_data):
+            num = idx + 1
+            title = data["title"]
+            section_tag = self._generate_section_tag(data)
+            text_panel_html = self._format_text_panel(
+                data["plain_text"], data.get("tables_html")
+            )
+
+            # --- Умный шрифт: расчет panel_class на основе длины текста и макета ---
+            total_text_chars = sum(len(p) for p in data["plain_text"])
+            if data.get("tables_html"):
+                total_text_chars += len(data["tables_html"]) * 200
+
+            # Полноэкранные макеты имеют больше места (~в 2 раза больше по ширине)
+            layout_multiplier = 1.0
+            if data["layout_type"] in ["intro", "full_text"]:
+                layout_multiplier = 2.0
+
+            threshold_condensed = TEXT_LEN_CONDENSED * layout_multiplier
+            threshold_tight = TEXT_LEN_TIGHT * layout_multiplier
+
+            panel_class = "analytical-panel animate-up"
+            if total_text_chars > threshold_tight:
+                panel_class += " panel-tight"
+            elif total_text_chars > threshold_condensed:
+                panel_class += " panel-condensed"
+            # -------------------------------------------------------------
+
+            if data["layout_type"] == "intro":
+                slides_content += f"""
+        <section class="slide hide-title">
+            <div class="logo-container"><img src="{logo}" alt="Логотип" class="header-logo" onerror="this.style.display='none'; this.onerror=null;"></div>
+            <div class="slide-header">
+                <div class="slide-number">{num:02d} / {total:02d}</div>
+            </div>
+            <div class="slide-content-title">
+                <h1 class="main-heading animate-up">{esc(title)}</h1>
+            </div>
+            <div class="presenter-card animate-up">
+                <span class="presenter-label">Докладчик</span>
+                <div class="presenter-name">{esc(data.get("speaker_name", ""))}</div>
+                <div class="presenter-info">{esc(data.get("speaker_info", ""))}</div>
+            </div>
+        </section>"""
+
+            elif data["layout_type"] == "conclusions_dual":
+                slides_content += f"""
+        <section class="slide">
+            <div class="logo-container"><img src="{logo}" alt="Логотип" class="header-logo" onerror="this.style.display='none'; this.onerror=null;"></div>
+            <div class="slide-header"><div class="slide-number">{num:02d} / {total:02d}</div><div class="slide-title">{esc(title)}</div></div>
+            <div class="slide-split" style="grid-template-columns: 1fr 1fr; height: calc(100% - 145px);">
+                <div class="{panel_class}">
+                    {data["left_html"]}
+                </div>
+                <div class="{panel_class}">
+                    {data["right_html"]}
+                </div>
+            </div>
+        </section>"""
+
+            elif data["layout_type"] == "research_roadmap":
+                slides_content += f"""
+        <section class="slide">
+            <div class="logo-container"><img src="{logo}" alt="Логотип" class="header-logo" onerror="this.style.display='none'; this.onerror=null;"></div>
+            <div class="slide-header"><div class="slide-number">{num:02d} / {total:02d}</div><div class="slide-title">{esc(title)}</div></div>
+            <div class="slide-split" style="grid-template-columns: 1.4fr 0.8fr; height: calc(100% - 145px);">
+                <div class="{panel_class}">
+                    <span class="section-tag" style="font-size: var(--fs-tag);">План 2026</span>
+                    {data["content_html"]}
+                </div>
+                <div class="viz-card animate-up" style="display: flex; flex-direction: column; justify-content: center; align-items: center; background: radial-gradient(circle, var(--accent-soft) 0%, transparent 80%); border-radius: 3rem; padding: 3rem; border: 1px solid var(--glass-border); position: relative; overflow: hidden; height: 100%;">
+                     <div class="rocket-glow"></div>
+                     <i data-lucide="rocket" style="width: 120px; height: 120px; color: var(--accent); margin-bottom: 2rem; filter: drop-shadow(0 0 30px var(--accent)); transform: rotate(-45deg); animation: pulse-rocket 2s infinite ease-in-out;"></i>
+                     <h4 style="font-family: 'Outfit'; font-size: var(--fs-research-year); margin: 0; font-weight: 800; background: linear-gradient(135deg, white 0%, var(--accent) 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">ROADMAP</h4>
+                </div>
+            </div>
+        </section>"""
+
+            elif data["layout_type"] == "full_text":
+                slides_content += f"""
+        <section class="slide">
+            <div class="logo-container"><img src="{logo}" alt="Логотип" class="header-logo" onerror="this.style.display='none'; this.onerror=null;"></div>
+            <div class="slide-header"><div class="slide-number">{num:02d} / {total:02d}</div><div class="slide-title">{esc(title)}</div></div>
+            <div class="slide-content-full animate-up" style="width: 85%; margin: 2rem auto;">
+                <div class="{panel_class}">
+                    {text_panel_html}
+                </div>
+            </div>
+        </section>"""
+
+            else:
+                # Стандартный макет со сплитом или только изображениями
+                
+                # Сортировка визуальных элементов по позиции (сверху вниз, слева направо)
+                data["visuals"].sort(key=lambda v: (v["pos"][1], v["pos"][0]))
+                
+                # Выбор лучшей компоновки
+                has_text = bool(text_panel_html.strip())
+                
+                # Размеры контейнера (приблизительно для 16:9 экрана)
+                cont_w = 1920 * (1.0 - DESIGN_CONFIG["layout"]["text_panel_ratio"] if has_text else 1.0)
+                cont_h = 940 
+                
+                results = self.get_best_layout(data["visuals"], cont_w, cont_h)
+                rows, cols, grid_styles, row_tmpl, col_tmpl = results
+
+                # Build visuals grid HTML
+                visuals_items_html = ""
+                for idx, vis in enumerate(data["visuals"]):
+                    style = grid_styles[idx] if idx < len(grid_styles) else ""
+                    caption_html = (
+                        f'<div class="viz-caption">{esc(vis.get("caption", ""))}</div>'
+                        if vis.get("caption")
+                        else ""
+                    )
+                    if vis.get("src"):
+                        alt_text = (esc(vis["caption"]) if vis.get("caption") else "Изображение")
+                        content_html = f'<div class="viz-box"><img src="{vis["src"]}" alt="{alt_text}"></div>'
+                    else:
+                        content_html = '<div class="error-box">Нет изображения</div>'
+                    visuals_items_html += f'<div class="viz-item" style="{style}">{caption_html}{content_html}</div>'
+
+                if has_text:
+                    # Динамический выбор пропорций для 1 визуала (непрерывное масштабирование)
+                    grid_split = f"{DESIGN_CONFIG['layout']['text_panel_ratio']}fr {1.0 - DESIGN_CONFIG['layout']['text_panel_ratio']}fr"
+                    
+                    if len(data["visuals"]) == 1:
+                        asp = 1.0
+                        _, _, vw, vh = data["visuals"][0]["pos"]
+                        if vh > 0: asp = vw / vh
+                        
+                        # Формула: чем уже рисунок (меньше asp), тем шире текстовое поле
+                        # Базовый вес текста 1.1 + добавка от узости рисунка
+                        text_weight = 1.1 + (1.0 - asp) * 0.8
+                        text_weight = max(0.6, min(1.7, text_weight)) # Ограничение
+                        image_weight = 2.0 - text_weight
+                        grid_split = f"{text_weight:.2f}fr {image_weight:.2f}fr"
+
+                    slides_content += f"""
+        <section class="slide">
+            <div class="logo-container"><img src="{logo}" alt="Логотип" class="header-logo" onerror="this.style.display='none'; this.onerror=null;"></div>
+            <div class="slide-header"><div class="slide-number">{num:02d} / {total:02d}</div><div class="slide-title">{esc(title)}</div></div>
+            <div class="slide-split" style="grid-template-columns: {grid_split}; height: calc(100% - 145px); min-height: 0;">
+                <div class="{panel_class}"><span class="section-tag" style="font-size: var(--fs-tag);">{esc(section_tag)}</span>{text_panel_html}</div>
+                <div class="img-stack animate-up" style="display: grid; grid-template-columns: {col_tmpl}; grid-template-rows: {row_tmpl}; gap: var(--gap-main);">{visuals_items_html}</div>
+            </div>
+        </section>"""
+                else:
+                    # Images only: full-width grid
+                    slides_content += f"""
+        <section class="slide">
+            <div class="logo-container"><img src="{logo}" alt="Логотип" class="header-logo" onerror="this.style.display='none'; this.onerror=null;"></div>
+            <div class="slide-header"><div class="slide-number">{num:02d} / {total:02d}</div><div class="slide-title">{esc(title)}</div></div>
+            <div class="slide-content-full animate-up" style="width: 100%; margin: 0; height: calc(100% - 145px); display: grid; grid-template-columns: {col_tmpl}; grid-template-rows: {row_tmpl}; gap: var(--gap-main); padding: 0;">
+                {visuals_items_html}
+            </div>
+        </section>"""
+
+        logger.info(f"Сохранение в {self.output_html}...")
+        with open(self.output_html, "w", encoding="utf-8") as f:
+            f.write(head_part)
+            f.write(slides_content)
+            f.write(tail_part)
+
+        logger.info("\n" + "=" * 40)
+        logger.info(" ИТОГОВЫЙ ОТЧЕТ КОНВЕРТАЦИИ")
+        logger.info("=" * 40)
+        logger.info(f" Всего слайдов:   {self.stats['total_slides']}")
+        logger.info(f" Успешных фото:   {self.stats['images_ok']}")
+        logger.info(f" Таблиц:          {self.stats['tables']}")
+        logger.info(f" Пропущено:       {self.stats['images_fail']} (см. лог выше)")
+        logger.info("=" * 40)
+
+
+if __name__ == "__main__":
+    ppt_file = "Промежуточная.pptx"
+    output_file = "web_demo/index_auto.html"
+
+    if os.path.exists(ppt_file):
+        conv = PPTConverter(ppt_file, output_file)
+        conv.extract_content()
+        conv.process_txt_files()
+        conv.generate_html()
+        logger.info(f"Готово! Файл создан: {output_file}")
+    else:
+        logger.error(f"Не найден входной файл .pptx: {ppt_file}")
