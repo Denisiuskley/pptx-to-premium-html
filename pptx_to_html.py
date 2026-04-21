@@ -1152,6 +1152,46 @@ class PPTConverter:
             "ole_skipped": 0,
         }
 
+    def _spatial_sort(self, visuals: list) -> list:
+        """
+        Интеллектуальная пространственная сортировка рисунков.
+        Группирует элементы в визуальные «ряды» на основе вертикальной близости (порог 20мм),
+        затем внутри каждого ряда сортирует их слева направо.
+        Это обеспечивает естественный порядок чтения (Top-Down, Left-to-Right).
+        """
+        if not visuals:
+            return []
+        if len(visuals) == 1:
+            return visuals
+
+        # 1. Первичная сортировка по Y
+        sorted_by_y = sorted(visuals, key=lambda v: v["pos"][1])
+
+        # Порог в 20 мм (720 000 EMU). 
+        # Если разница между Y-координатами двух последовательных элементов меньше этого порога,
+        # они считаются частью одного «визуального ряда».
+        threshold = 720000
+
+        rows = []
+        if sorted_by_y:
+            current_row = [sorted_by_y[0]]
+            for i in range(1, len(sorted_by_y)):
+                # Сравниваем Y текущего элемента с Y последнего элемента в текущем ряду
+                if sorted_by_y[i]["pos"][1] - current_row[-1]["pos"][1] < threshold:
+                    current_row.append(sorted_by_y[i])
+                else:
+                    rows.append(current_row)
+                    current_row = [sorted_by_y[i]]
+            rows.append(current_row)
+
+        # 2. Внутри каждого ряда сортируем по X (слева направо)
+        final_sorted = []
+        for row in rows:
+            row.sort(key=lambda v: v["pos"][0])
+            final_sorted.extend(row)
+
+        return final_sorted
+
     def get_icon_by_text(self, text: str) -> str:
         """Возвращает идентификатор иконки на основе текста (по ключевым словам)."""
         text = text.lower()
@@ -2530,8 +2570,8 @@ class PPTConverter:
             else:
                 # Стандартный макет со сплитом или только изображениями
                 
-                # Сортировка визуальных элементов по позиции (сверху вниз, слева направо)
-                data["visuals"].sort(key=lambda v: (v["pos"][1], v["pos"][0]))
+                # Сортировка визуальных элементов: интеллектуальное распознавание рядов (Top-Down, Left-to-Right)
+                data["visuals"] = self._spatial_sort(data["visuals"])
                 
                 # Выбор лучшей компоновки
                 has_text = bool(text_panel_html.strip())
