@@ -7,6 +7,8 @@ import math
 import logging
 import hashlib
 import time
+import base64
+import mimetypes
 from pathlib import Path
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
@@ -56,13 +58,9 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>НИЦ ГГН - Денис Шустов</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link
-        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=Outfit:wght@500;700&family=Roboto+Mono&display=swap"
-        rel="stylesheet" media="print" onload="this.media='all'">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js" defer></script>
-    <script src="https://unpkg.com/lucide@latest" defer></script>
+    <link rel="stylesheet" href="libs/fonts/fonts.css">
+    <script src="libs/gsap/gsap.min.js" defer></script>
+    <script src="libs/lucide/lucide.min.js" defer></script>
     <!-- Local MathJax for professional formula rendering -->
     <script src="libs/mathjax/tex-mml-chtml.js" defer></script>
         <style>
@@ -1126,6 +1124,7 @@ DESIGN_CONFIG = {
         "env_path": str(BASE_DIR / ".env"),
         "default_model": "google/gemini-flash-1.5",
     },
+    "STATIC_ASSETS_EMBED": True,
 }
 
 
@@ -1151,6 +1150,46 @@ class PPTConverter:
             "tables": 0,
             "ole_skipped": 0,
         }
+
+    def _get_data_uri(self, file_path: Path) -> str:
+        """Превращает файл в Base64 Data URI."""
+        if not file_path.exists():
+            logger.warning(f"Файл не найден для эмбеддинга: {file_path}")
+            return ""
+        
+        mime_type, _ = mimetypes.guess_type(str(file_path))
+        if not mime_type:
+            mime_type = "application/octet-stream"
+            
+        with open(file_path, "rb") as f:
+            data = f.read()
+            b64 = base64.b64encode(data).decode('utf-8')
+            return f"data:{mime_type};base64,{b64}"
+
+    def _get_file_content(self, file_path: Path) -> str:
+        """Читает текстовый файл."""
+        if not file_path.exists():
+            logger.warning(f"Текстовый файл не найден: {file_path}")
+            return ""
+        with open(file_path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    def _inline_css_fonts(self, css_path: Path) -> str:
+        """Читает CSS и вшивает шрифты в него через Data URI."""
+        content = self._get_file_content(css_path)
+        if not content:
+            return ""
+        
+        # Регулярка для поиска url(...)
+        def fill_url(match):
+            url_path = match.group(1).strip("'\"")
+            # Пути в fonts.css относительны самой таблицы стилей
+            full_path = (css_path.parent / url_path).resolve()
+            data_uri = self._get_data_uri(full_path)
+            # Match browser expectation for format(...)
+            return f"url('{data_uri}')"
+        
+        return re.sub(r"url\((.*?)\)", fill_url, content)
 
     def _spatial_sort(self, visuals: list) -> list:
         """
@@ -2467,12 +2506,45 @@ class PPTConverter:
         """Генерирует итоговый HTML-файл на основе встроенного шаблона и данных слайдов."""
         logger.info("Рендеринг HTML...")
 
-        # Используем встроенный шаблон вместо чтения файла
+        # --- Standalone / Embedding Mode ---
+        is_standalone = DESIGN_CONFIG.get("STATIC_ASSETS_EMBED", False)
         head_part = BASE_HTML_TEMPLATE
         tail_part = BASE_HTML_TAIL
-
-        logo = DESIGN_CONFIG["paths"]["logo_white"]
-        icon_sz = DESIGN_CONFIG["icon_size"]
+        
+        # Logo path resolution
+        logo_rel = DESIGN_CONFIG["paths"]["logo_white"]
+        v_logo_path = BASE_DIR / "web_demo" / logo_rel
+        if not v_logo_path.exists():
+            v_logo_path = BASE_DIR / logo_rel
+            
+        if is_standalone:
+            logger.info("Подготовка автономного (standalone) файла (все ресурсы вшиваются)...")
+            # 1. Инлайним логотип
+            logo = self._get_data_uri(v_logo_path)
+            
+            # 2. Инлайним шрифты
+            fonts_css_path = BASE_DIR / "libs" / "fonts" / "fonts.css"
+            fonts_inlined = self._inline_css_fonts(fonts_css_path)
+            head_part = re.sub(
+                r'<link rel="stylesheet" href="libs/fonts/fonts.css">',
+                f'<style>{fonts_inlined}</style>',
+                head_part
+            )
+            
+            # 3. Инлайним скрипты
+            scripts_to_inline = [
+                ("libs/gsap/gsap.min.js", r'<script src="libs/gsap/gsap.min.js" defer></script>'),
+                ("libs/lucide/lucide.min.js", r'<script src="libs/lucide/lucide.min.js" defer></script>'),
+                ("libs/mathjax/tex-mml-chtml.js", r'<!-- Local MathJax for professional formula rendering -->\s*<script src="libs/mathjax/tex-mml-chtml.js" defer></script>')
+            ]
+            
+            for rel_path, pattern in scripts_to_inline:
+                s_path = BASE_DIR / rel_path
+                s_content = self._get_file_content(s_path)
+                # Избегаем bad escape \d в s_content через лямбду
+                head_part = re.sub(pattern, lambda m, content=s_content: f'<script>{content}</script>', head_part)
+        else:
+            logo = DESIGN_CONFIG["paths"]["logo_white"]
 
         slides_content = ""
         total = len(self.slides_data)
@@ -2505,6 +2577,20 @@ class PPTConverter:
                 panel_class += " panel-condensed"
             # -------------------------------------------------------------
 
+            if is_standalone:
+                embedded_count = 0
+                for vis in data.get("visuals", []):
+                    if vis.get("src") and not vis["src"].startswith("data:"):
+                        # Картинки в web_demo/media/... относительны корня проекта в slides_data
+                        v_path = BASE_DIR / "web_demo" / vis["src"]
+                        if v_path.exists():
+                            vis["src"] = self._get_data_uri(v_path)
+                            embedded_count += 1
+                        else:
+                            logger.warning(f"Медиа не найдено для эмбеддинга: {v_path}")
+                if embedded_count > 0:
+                    logger.debug(f"Слайд {idx+1}: эмбедировано {embedded_count} изображений")
+            
             if data["layout_type"] == "intro":
                 slides_content += f"""
         <section class="slide hide-title">
