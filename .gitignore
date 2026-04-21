@@ -1,0 +1,11 @@
+.cache/
+.env
+.vscode/
+__pycache__/
+pptx_extracted/
+web_demo/
+*.html
+*.pptx
+*.txt
+libs/
+!libs/fonts/fonts.css
