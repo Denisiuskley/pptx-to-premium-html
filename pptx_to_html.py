@@ -57,7 +57,7 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>НИЦ ГГН - Денис Шустов</title>
+    <title>Доклад: {speaker_name} (ПНИПУ)</title>
     <link rel="stylesheet" href="libs/fonts/fonts.css">
     <script src="libs/gsap/gsap.min.js" defer></script>
     <script src="libs/lucide/lucide.min.js" defer></script>
@@ -81,7 +81,7 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
                 --header-height: 85px;
                 --slide-padding-v: 2rem;
                 --slide-padding-h: 4rem;
-                --panel-padding: 3.5rem;
+                --panel-padding: 2.5rem;
 
                 --fs-main-title: 3.5rem;
                 --fs-slide-title: 1.5rem;
@@ -101,8 +101,8 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
                 --fs-table-th: 1.05rem;
                 --fs-table-td: 1.1rem;
 
-                --gap-main: 4rem;
-                --gap-items: 1.5rem;
+                --gap-main: 2rem;
+                --gap-items: 1.2rem;
 
                 /* Config-driven variables */
                 --icon-size: 1.6rem;
@@ -179,7 +179,7 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
             gap: 1.5rem;
             margin-bottom: var(--margin-header);
             border-bottom: 1px solid var(--glass-border);
-            padding-bottom: 0.75rem;
+            padding-bottom: 0.5rem;
             position: relative;
             height: var(--header-height);
         }
@@ -303,6 +303,29 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
             align-items: stretch;
             height: 100%;
             min-height: 0;
+            width: 100%;
+        }
+
+        /* --- Стили для адаптивной верстки (одна колонка рисунков - одиночные или в ряд) --- */
+        .slide-split.layout-auto-width {
+            grid-template-columns: minmax(25%, 1fr) auto !important;
+        }
+        .layout-auto-width .img-stack {
+            width: auto;
+            justify-content: flex-end;
+        }
+        .layout-auto-width .viz-item {
+            width: auto;
+            flex: none;
+        }
+        .layout-auto-width .viz-box {
+            width: auto;
+            max-width: 65vw;
+        }
+        .layout-auto-width .viz-box img {
+            width: auto;
+            height: 100%;
+            object-fit: contain;
         }
 
         .viz-item {
@@ -362,7 +385,7 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
             border-radius: 8px;
             display: flex;
             flex-direction: column;
-            gap: 1rem;
+            gap: 0.75rem;
             overflow-y: auto;
             box-shadow: inset 0 1px 0 rgba(255,255,255,0.1), inset 1px 0 0 rgba(255,255,255,0.05), 0 8px 32px rgba(0,0,0,0.3);
             position: relative;
@@ -387,13 +410,13 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
         .sub-heading {
             font-size: var(--fs-sub-heading);
             font-weight: 600;
-            margin-bottom: 1rem;
+            margin-bottom: 0.75rem;
         }
 
         .list-item {
             display: flex;
             gap: 1rem;
-            margin-bottom: 1rem;
+            margin-bottom: 0.75rem;
             align-items: flex-start;
         }
 
@@ -409,7 +432,7 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
         .list-item-bullet {
             display: flex;
             gap: 1rem;
-            margin-bottom: 1rem;
+            margin-bottom: 0.75rem;
             align-items: flex-start;
             padding-left: var(--bullet-indent);
             border-left: var(--bullet-border);
@@ -430,8 +453,7 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
             max-width: fit-content;
         }
          .viz-container:has(.viz-item) .viz-item {
-             width: auto;
-             max-width: 60vw;
+             width: 100%;
          }
 
          .viz-item.wide {
@@ -730,18 +752,40 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
             animation: pulse-rocket 2s infinite ease-in-out;
         }
 
-        .analytical-panel.panel-condensed {
-            font-size: 1.1rem;
+        /* Уровни плотности для переполненного контента (автоматически применяются через JS) */
+        .layout-dense {
+            --gap-main: 0.6rem !important;
+            gap: 0.6rem !important;
         }
-        .analytical-panel.panel-condensed .list-text {
-            line-height: 1.4;
+        .layout-dense .list-item, 
+        .layout-dense .list-item-bullet {
+            margin-bottom: 0.4rem !important;
+            padding-top: 0.25rem !important;
+            padding-bottom: 0.25rem !important;
+        }
+        .layout-dense .sub-heading {
+            margin-bottom: 0.5rem !important;
+        }
+        .layout-dense .list-text {
+            line-height: 1.4 !important;
         }
 
-        .analytical-panel.panel-tight {
-            font-size: 0.95rem;
+        .layout-compact {
+            --gap-main: 0.25rem !important;
+            gap: 0.25rem !important;
+            font-size: 0.95em !important;
         }
-        .analytical-panel.panel-tight .list-text {
-            line-height: 1.3;
+        .layout-compact .list-item, 
+        .layout-compact .list-item-bullet {
+            margin-bottom: 0.15rem !important;
+            padding-top: 0.1rem !important;
+            padding-bottom: 0.1rem !important;
+        }
+        .layout-compact .sub-heading {
+            margin-bottom: 0.2rem !important;
+        }
+        .layout-compact .list-text {
+            line-height: 1.25 !important;
         }
 
         @keyframes pulse-rocket {
@@ -978,6 +1022,34 @@ BASE_HTML_TAIL = """
                 if (e.target === lightbox) closeLightbox();
             });
         }
+
+        /**
+         * Автоматическое уплотнение контента при переполнении (Overflow Detection)
+         */
+        function applyDynamicDensity() {
+            const panels = document.querySelectorAll('.analytical-panel');
+            panels.forEach(panel => {
+                // Сбрасываем классы для чистого пересчета
+                panel.classList.remove('layout-dense', 'layout-compact');
+                
+                // Пересчитываем: если контент не влезает, пробуем уровни плотности
+                if (panel.scrollHeight > panel.clientHeight) {
+                    panel.classList.add('layout-dense');
+                    
+                    // Если всё еще не влезает после первого уровня, применяем максимальное уплотнение
+                    if (panel.scrollHeight > panel.clientHeight) {
+                        panel.classList.replace('layout-dense', 'layout-compact');
+                    }
+                }
+            });
+        }
+
+        // Запуск после загрузки и при изменении размера окна
+        window.addEventListener('load', () => {
+            // Небольшая задержка, чтобы шрифты и картинки успели отрисоваться
+            setTimeout(applyDynamicDensity, 200);
+        });
+        window.addEventListener('resize', applyDynamicDensity);
     </script>
 </body>
 </html>
@@ -1138,7 +1210,7 @@ class PPTConverter:
         stats: Статистика конвертации.
     """
 
-    def __init__(self, ppt_path: str, output_html: str):
+    def __init__(self, ppt_path: str, output_html: str = None):
         self.ppt_path = ppt_path
         self.template_path = None  # Не используется, шаблон вшит в код
         self.output_html = output_html
@@ -2329,49 +2401,34 @@ class PPTConverter:
 
             if i == 0:
                 slide_info["layout_type"] = "intro"
-                slide_info["title"] = ""
-                speaker_name = ""
-                speaker_info = ""
-                remaining = []
-                # DEBUG: логируем plain_text для первого слайда
-                logger.info(f"[DEBUG] Slide 1 plain_text: {slide_info['plain_text']}")
+                
+                # Собираем все текстовые блоки первого слайда (кроме заголовка)
+                presenter_items = []
                 for idx, item in enumerate(slide_info["plain_text"]):
-                    # Если это список сегментов (от PPTX), объединяем в строку для метаданных интро
                     txt = "".join(s for s in item if not s.startswith("\0")) if isinstance(item, list) else str(item)
+                    txt = txt.strip()
+                    if not txt: continue
                     
                     if idx == 0:
                         slide_info["title"] = txt
-                    elif idx == 1:
-                        speaker_name = txt
-                    elif idx == 2:
-                        speaker_info = txt
                     else:
-                        remaining.append(txt)
-                clean_name, extra_info = self._clean_speaker_name(speaker_name)
-                if extra_info and not speaker_info:
-                    speaker_info = extra_info
+                        presenter_items.append(txt)
+                
+                # Объединяем и чистим через существующий помощник
+                full_text = "\n".join(presenter_items)
+                name, info = self._clean_speaker_name(full_text)
+                
+                # Для формирования имени файла и карточки
+                if name:
+                    # Сохраняем "дисплейное" имя без ПНИПУ (как в презентации)
+                    slide_info["speaker_name"] = name
+                    slide_info["speaker_info"] = info
+                else:
+                    # Если имя не выделилось (пусто), берем что есть
+                    slide_info["speaker_name"] = "Докладчик"
+                    slide_info["speaker_info"] = full_text
 
-                # КОРРЕКЦИЯ: если имя пустое (например, было только "Докладчик"), а в speaker_info есть текст — меняем местами
-                if not clean_name and speaker_info:
-                    possible_name, possible_extra = self._clean_speaker_name(
-                        speaker_info
-                    )
-                    if possible_name:
-                        speaker_name = possible_name
-                        speaker_info = possible_extra or ""
-                        clean_name = possible_name
-
-                # КОРРЕКЦИЯ: если после этого speaker_info пуст, но remaining не пуст — берём первый элемент remaining как должность
-                if not speaker_info and remaining:
-                    speaker_info = remaining[0]
-                    remaining = remaining[1:]
-
-                logger.info(
-                    f"[DEBUG] speaker_name='{speaker_name}', speaker_info='{speaker_info}'"
-                )
-                slide_info["speaker_name"] = speaker_name
-                slide_info["speaker_info"] = speaker_info
-                slide_info["plain_text"] = remaining
+                slide_info["plain_text"] = [] 
 
             elif len(slide_info["visuals"]) == 2:
                 slide_info["layout_type"] = "two_images"
@@ -2506,11 +2563,29 @@ class PPTConverter:
         """Генерирует итоговый HTML-файл на основе встроенного шаблона и данных слайдов."""
         logger.info("Рендеринг HTML...")
 
+        # Регулировка <title> и имени файла на основе данных докладчика
+        speaker_name = self.slides_data[0].get("speaker_name", "") if self.slides_data else ""
+        
+        # 1. Сначала определяем имя на основе докладчика
+        if speaker_name:
+            safe_name = re.sub(r'[\\/*?:"<>|]', '', speaker_name).strip()
+            if safe_name:
+                # Добавляем ПНИПУ только в название файла
+                self.output_html = f"{safe_name} (ПНИПУ).html"
+        
+        # 2. Если имя все еще не определено (и не было передано снаружи), используем внутренний фолбэк
+        if not self.output_html:
+            self.output_html = "presentation_output.html"
+
         # --- Standalone / Embedding Mode ---
         is_standalone = DESIGN_CONFIG.get("STATIC_ASSETS_EMBED", False)
         head_part = BASE_HTML_TEMPLATE
         tail_part = BASE_HTML_TAIL
         
+        # Регулировка <title> в head_part
+        s_title = speaker_name if speaker_name else "Доклад"
+        head_part = head_part.replace("{speaker_name}", s_title)
+
         # Logo path resolution
         logo_rel = DESIGN_CONFIG["paths"]["logo_white"]
         v_logo_path = BASE_DIR / "web_demo" / logo_rel
@@ -2656,20 +2731,43 @@ class PPTConverter:
             else:
                 # Стандартный макет со сплитом или только изображениями
                 
-                # Сортировка визуальных элементов: интеллектуальное распознавание рядов (Top-Down, Left-to-Right)
+                # Сортировка визуальных элементов
                 data["visuals"] = self._spatial_sort(data["visuals"])
                 
-                # Выбор лучшей компоновки
+                # --- Расчет динамических пропорций (Dynamic Ratio) ---
                 has_text = bool(text_panel_html.strip())
+                base_ratio = DESIGN_CONFIG["layout"]["text_panel_ratio"] # 0.35
+                layout_class = "slide-split"
                 
-                # Размеры контейнера (приблизительно для 16:9 экрана)
-                cont_w = 1920 * (1.0 - DESIGN_CONFIG["layout"]["text_panel_ratio"] if has_text else 1.0)
+                # 1. Предварительный расчет компоновки для определения количества колонок
+                # Мы делаем "пробный" запуск с условной шириной, чтобы понять, пойдут ли картинки в один ряд или в несколько
+                pre_results = self.get_best_layout(data["visuals"], 1200, 940)
+                rows_pre, cols_pre = pre_results[0], pre_results[1]
+                
+                if has_text:
+                    if cols_pre == 1:
+                        # --- Адаптивный режим для ОДНОЙ КОЛОНКИ рисунков (1 шт или стек по вертикали) ---
+                        grid_split = "1fr auto"
+                        layout_class += " layout-auto-width"
+                        cont_w = 1200 # Условное значение для расчета Area
+                    else:
+                        # --- Расчет по плотности для МНОГОКОЛОНОЧНЫХ компоновок ---
+                        d_factor = max(0.65, min(1.3, total_text_chars / 600.0 + 0.5))
+                        dynamic_ratio = base_ratio * d_factor
+                        dynamic_ratio = max(0.25, min(0.45, dynamic_ratio))
+                        
+                        grid_split = f"{dynamic_ratio:.3f}fr {1.0 - dynamic_ratio:.3f}fr"
+                        cont_w = 1728 * (1.0 - dynamic_ratio)
+                else:
+                    cont_w = 1728
+                    grid_split = "1fr"
+
                 cont_h = 940 
-                
+                # Финальный расчет с уточненной шириной
                 results = self.get_best_layout(data["visuals"], cont_w, cont_h)
                 rows, cols, grid_styles, row_tmpl, col_tmpl = results
 
-                # Build visuals grid HTML
+                # Сборка HTML визуальных элементов
                 visuals_items_html = ""
                 for idx, vis in enumerate(data["visuals"]):
                     style = grid_styles[idx] if idx < len(grid_styles) else ""
@@ -2686,26 +2784,11 @@ class PPTConverter:
                     visuals_items_html += f'<div class="viz-item" style="{style}">{caption_html}{content_html}</div>'
 
                 if has_text:
-                    # Динамический выбор пропорций для 1 визуала (непрерывное масштабирование)
-                    grid_split = f"{DESIGN_CONFIG['layout']['text_panel_ratio']}fr {1.0 - DESIGN_CONFIG['layout']['text_panel_ratio']}fr"
-                    
-                    if len(data["visuals"]) == 1:
-                        asp = 1.0
-                        _, _, vw, vh = data["visuals"][0]["pos"]
-                        if vh > 0: asp = vw / vh
-                        
-                        # Формула: чем уже рисунок (меньше asp), тем шире текстовое поле
-                        # Базовый вес текста 1.1 + добавка от узости рисунка
-                        text_weight = 1.1 + (1.0 - asp) * 0.8
-                        text_weight = max(0.6, min(1.7, text_weight)) # Ограничение
-                        image_weight = 2.0 - text_weight
-                        grid_split = f"{text_weight:.2f}fr {image_weight:.2f}fr"
-
                     slides_content += f"""
         <section class="slide">
             <div class="logo-container"><img src="{logo}" alt="Логотип" class="header-logo" onerror="this.style.display='none'; this.onerror=null;"></div>
             <div class="slide-header"><div class="slide-number">{num:02d} / {total:02d}</div><div class="slide-title">{esc(title)}</div></div>
-            <div class="slide-split" style="grid-template-columns: {grid_split}; height: calc(100% - 145px); min-height: 0;">
+            <div class="slide-split {layout_class}" style="grid-template-columns: {grid_split}; height: calc(100% - 145px); min-height: 0;">
                 <div class="{panel_class}"><span class="section-tag" style="font-size: var(--fs-tag);">{esc(section_tag)}</span>{text_panel_html}</div>
                 <div class="img-stack animate-up" style="display: grid; grid-template-columns: {col_tmpl}; grid-template-rows: {row_tmpl}; gap: var(--gap-main);">{visuals_items_html}</div>
             </div>
@@ -2739,13 +2822,12 @@ class PPTConverter:
 
 if __name__ == "__main__":
     ppt_file = "Промежуточная.pptx"
-    output_file = "web_demo/index_auto.html"
 
     if os.path.exists(ppt_file):
-        conv = PPTConverter(ppt_file, output_file)
+        conv = PPTConverter(ppt_file)
         conv.extract_content()
         conv.process_txt_files()
         conv.generate_html()
-        logger.info(f"Готово! Файл создан: {output_file}")
+        logger.info(f"Готово! Файл создан: {conv.output_html}")
     else:
         logger.error(f"Не найден входной файл .pptx: {ppt_file}")
