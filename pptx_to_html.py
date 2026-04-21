@@ -69,8 +69,8 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
                 --bg-card: rgba(15, 23, 42, 0.7);
                 --accent: #00f2ff;
                 --accent-soft: rgba(0, 242, 255, 0.1);
-                --text-main: #ffffff;
-                --text-dim: #e2e8f0;
+                --text-main: #f8fafc;
+                --text-dim: #cbd5e1;
                 --glass-border: rgba(255, 255, 255, 0.1);
                 --gradient-accent: linear-gradient(135deg, #00f2ff 0%, #0066ff 100%);
                 --glow-cyan: 0 0 20px rgba(0, 242, 255, 0.4);
