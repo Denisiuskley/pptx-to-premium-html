@@ -368,8 +368,12 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
             max-width: 65vw;
         }
         .layout-auto-width .viz-box img {
-            width: auto;
+            width: 100%;
             height: 100%;
+            max-width: 100%;
+            max-height: 100%;
+            min-width: 0;
+            min-height: 0;
             object-fit: contain;
         }
 
@@ -647,6 +651,10 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
         .viz-box img {
             width: 100%;
             height: 100%;
+            max-width: 100%;
+            max-height: 100%;
+            min-width: 0;
+            min-height: 0;
             object-fit: contain;
             display: block;
             transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
