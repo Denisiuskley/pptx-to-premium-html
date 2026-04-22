@@ -467,6 +467,24 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
             flex-shrink: 0;
             width: var(--icon-size);
             height: var(--icon-size);
+            transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+
+        /* Начальное состояние для анимации появления */
+        .animate-marker {
+            opacity: 0;
+            transform: scale(0);
+            display: inline-block;
+        }
+
+        /* Бесконечная пульсация (активируется после появления) */
+        .marker-pulse {
+            animation: markerBreathe 3s infinite ease-in-out;
+        }
+
+        @keyframes markerBreathe {
+            0%, 100% { transform: scale(1); filter: drop-shadow(0 0 0px var(--accent)); opacity: 0.8; }
+            50% { transform: scale(1.15); filter: drop-shadow(0 0 8px var(--accent)); opacity: 1; }
         }
 
         /* Bullet list styling - distinct visual level */
@@ -913,10 +931,35 @@ BASE_HTML_TAIL = """
             if (activeSlideItems.length === 0) return;
             
             if (typeof gsap !== 'undefined') {
+                // Анимация текстовых блоков
                 gsap.fromTo(activeSlideItems,
                     { opacity: 0, y: 30 },
                     { opacity: 1, y: 0, duration: 0.8, stagger: 0.2, ease: "power2.out" }
                 );
+
+                // ОДНОВРЕМЕННАЯ анимация маркеров (Premium Pop-in)
+                const activeMarkers = presentation.querySelectorAll('.slide')[currentSlide].querySelectorAll('.animate-marker');
+                if (activeMarkers.length > 0) {
+                    gsap.fromTo(activeMarkers,
+                        { opacity: 0, scale: 0 },
+                        { 
+                            opacity: 1, 
+                            scale: 1, 
+                            duration: 0.6, 
+                            stagger: 0.2, 
+                            ease: "back.out(1.7)",
+                            onComplete: function() {
+                                // Запуск пульсации после завершения появления
+                                this.targets().forEach(el => {
+                                    // Добавляем класс пульсации непосредственно к SVG
+                                    const svg = el.tagName.toLowerCase() === 'svg' ? el : el.querySelector('svg');
+                                    if (svg) svg.classList.add('marker-pulse');
+                                    else el.classList.add('marker-pulse');
+                                });
+                            }
+                        }
+                    );
+                }
             } else {
                 activeSlideItems.forEach(el => {
                     el.style.opacity = '1';
@@ -1538,7 +1581,7 @@ class PPTConverter:
                     clean_item = clean_text(item)
                     icon = self.get_icon_by_text(clean_item)
                     processed_items.append(
-                        f"<div class='summary-item'><i data-lucide='{icon}'></i> <div class='list-text'>{esc(clean_item)}</div></div>"
+                        f"<div class='summary-item animate-up'><i data-lucide='{icon}' class='animate-marker'></i> <div class='list-text'>{esc(clean_item)}</div></div>"
                     )
 
                 mid = (len(processed_items) + 1) // 2
@@ -1559,7 +1602,7 @@ class PPTConverter:
                 for item in items:
                     clean_item = clean_text(item)
                     items_html.append(
-                        f"<div class='roadmap-item'><i data-lucide='rocket'></i> <div class='list-text'>{esc(clean_item)}</div></div>"
+                        f"<div class='roadmap-item animate-up'><i data-lucide='rocket' class='animate-marker'></i> <div class='list-text'>{esc(clean_item)}</div></div>"
                     )
                 self.slides_data.append(
                     {
@@ -2740,15 +2783,15 @@ class PPTConverter:
                                 icon = bullet_icon_map.get(item.get("bullet_char"), "chevron-right")
 
                             parts.append(
-                                f'<div class="list-item-bullet" style="padding-left: {bullet_indent}; border-left: {bullet_border}; background: {bullet_bg};">'
-                                f'<i data-lucide="{icon}" style="width: {bullet_icon_size}; height: {bullet_icon_size}; flex-shrink: 0;"></i>'
+                                f'<div class="list-item-bullet animate-up" style="padding-left: {bullet_indent}; border-left: {bullet_border}; background: {bullet_bg};">'
+                                f'<i data-lucide="{icon}" class="animate-marker" style="width: {bullet_icon_size}; height: {bullet_icon_size}; flex-shrink: 0;"></i>'
                                 f'<div class="list-text">{display_text}</div></div>'
                             )
                         else:
                             keyword_icon = self.get_icon_by_text(item["text"])
                             parts.append(
-                                f'<div class="list-item">'
-                                f'<i data-lucide="{keyword_icon}" style="width: {DESIGN_CONFIG["icon_size"]}; height: {DESIGN_CONFIG["icon_size"]}; flex-shrink: 0;"></i>'
+                                f'<div class="list-item animate-up">'
+                                f'<i data-lucide="{keyword_icon}" class="animate-marker" style="width: {DESIGN_CONFIG["icon_size"]}; height: {DESIGN_CONFIG["icon_size"]}; flex-shrink: 0;"></i>'
                                 f'<div class="list-text">{display_text}</div></div>'
                             )
 
