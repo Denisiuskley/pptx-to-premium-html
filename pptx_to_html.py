@@ -61,8 +61,39 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
     <link rel="stylesheet" href="libs/fonts/fonts.css">
     <script src="libs/gsap/gsap.min.js" defer></script>
     <script src="libs/lucide/lucide.min.js" defer></script>
-    <!-- Local MathJax for professional formula rendering -->
-    <script src="libs/mathjax/tex-mml-chtml.js" defer></script>
+    <!-- Local MathJax configuration -->
+    <script>
+        window.MathJax = {
+            options: {
+                enableExplorer: false, // Отключаем Explorer, который может перекрывать формулы желтыми плашками
+                enableAssistiveMml: true
+            },
+            loader: {
+                load: ['[tex]/ams']
+            },
+            svg: {
+                fontCache: 'global',
+                scale: 1.2
+            },
+            startup: {
+                ready: () => {
+                    console.log('MathJax is ready (SVG mode)!');
+                    MathJax.startup.defaultReady();
+                    MathJax.startup.promise.then(() => {
+                        // Анимация появления формул после рендеринга
+                        gsap.to('.formula-container, .formula-block', {
+                            opacity: 1,
+                            y: 0,
+                            duration: 0.8,
+                            stagger: 0.1,
+                            ease: 'power2.out'
+                        });
+                    });
+                }
+            }
+        };
+    </script>
+    <script src="libs/mathjax/tex-mml-svg.js" defer></script>
         <style>
             :root {
                 --bg-deep: #05080e;
@@ -101,6 +132,8 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
                 --fs-table-th: 1.05rem;
                 --fs-table-td: 1.1rem;
 
+                --fs-formula: 1.25rem;
+
                 --gap-main: 2rem;
                 --gap-items: 1.2rem;
 
@@ -111,7 +144,7 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
                 --bullet-border: 2px solid rgba(0, 242, 255, 0.15);
                 --bullet-bg: rgba(0, 242, 255, 0.03);
                 --formula-fallback-font: 'Roboto Mono', monospace;
-                --formula-fallback-size: 0.9em;
+                --formula-fallback-size: 1.1em;
             }
 
         * {
@@ -306,6 +339,15 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
             width: 100%;
         }
 
+        .formula-block {
+            margin: 1.5rem 0;
+            text-align: center;
+            background: rgba(0, 242, 255, 0.02);
+            padding: 1rem;
+            border-radius: 8px;
+            border: 1px solid var(--glass-border);
+        }
+
         /* --- Стили для адаптивной верстки (одна колонка рисунков - одиночные или в ряд) --- */
         .slide-split.layout-auto-width {
             grid-template-columns: minmax(25%, 1fr) auto !important;
@@ -476,7 +518,7 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
         /* Formula fallback styling */
         .formula-fallback {
             font-family: var(--formula-fallback-font, 'Roboto Mono'), monospace;
-            font-size: var(--formula-fallback-size, 0.9em);
+            font-size: var(--formula-fallback-size, 1.1em);
             white-space: nowrap;
             color: var(--accent);
             opacity: 0.9;
@@ -485,10 +527,46 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
             background: rgba(0, 242, 255, 0.05);
             border-radius: 4px;
         }
+
         .formula-container {
             display: inline-block;
             vertical-align: middle;
-            margin: 0 0.2rem;
+            margin: 0 0.3rem;
+            opacity: 0;
+            transform: translateY(5px);
+        }
+
+        .formula-block {
+            background: var(--bg-card);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--glass-border);
+            padding: 2rem;
+            border-radius: 16px;
+            margin: 1.5rem 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+            opacity: 0;
+            transform: translateY(15px);
+            transition: border-color 0.4s, box-shadow 0.4s;
+        }
+
+        .formula-block:hover {
+            border-color: var(--accent);
+            box-shadow: 0 0 30px rgba(0, 242, 255, 0.15);
+        }
+
+        /* MathJax SVG tuning */
+        mjx-container[jax="SVG"] {
+            color: var(--text-main);
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+
+        .formula-container mjx-container[jax="SVG"] {
+            display: inline-block !important;
+            vertical-align: middle !important;
         }
 
         .viz-box {
@@ -1154,9 +1232,12 @@ DESIGN_CONFIG = {
         "priority": "above",     # Приоритетное расположение подписи: сверху
     },
     "formula": {
-        "mathjax_path": "libs/mathjax/tex-mml-chtml.js", # Путь к локальному MathJax
+        "mathjax_path": "libs/mathjax/tex-mml-svg.js", # Путь к локальному MathJax (SVG версия)
         "fallback_font": "Roboto Mono",
         "fallback_font_size": "0.9em",
+        "padding": "1.5rem",
+        "background": "rgba(255, 255, 255, 0.01)",
+        "border_color": "rgba(0, 242, 255, 0.15)",
     },
     "layout": {
         "caption_height_px": 50,  # Резерв высоты под заголовок рисунка внутри Grid-ячейки
@@ -1220,6 +1301,7 @@ class PPTConverter:
             "images_ok": 0,
             "images_fail": 0,
             "tables": 0,
+            "formulas": 0,
             "ole_skipped": 0,
         }
 
@@ -1263,45 +1345,49 @@ class PPTConverter:
         
         return re.sub(r"url\((.*?)\)", fill_url, content)
 
-    def _spatial_sort(self, visuals: list) -> list:
+    def _spatial_sort(self, items: list, threshold_mm: float = 20.0) -> list:
         """
-        Интеллектуальная пространственная сортировка рисунков.
-        Группирует элементы в визуальные «ряды» на основе вертикальной близости (порог 20мм),
-        затем внутри каждого ряда сортирует их слева направо.
-        Это обеспечивает естественный порядок чтения (Top-Down, Left-to-Right).
+        Сортировка изображений с использованием 'жадных строк' (greedy rows).
+        Для элементов с pos = (left, top, width, height).
         """
-        if not visuals:
+        if not items:
             return []
-        if len(visuals) == 1:
-            return visuals
-
-        # 1. Первичная сортировка по Y
-        sorted_by_y = sorted(visuals, key=lambda v: v["pos"][1])
-
-        # Порог в 20 мм (720 000 EMU). 
-        # Если разница между Y-координатами двух последовательных элементов меньше этого порога,
-        # они считаются частью одного «визуального ряда».
-        threshold = 720000
-
+        
+        threshold = threshold_mm * 36000 # 1 mm ~ 36000 EMU
+        
+        # Сортируем сначала по Y (top)
+        sorted_by_y = sorted(items, key=lambda x: x.get("pos", (0, 0, 0, 0))[1])
+        
         rows = []
         if sorted_by_y:
             current_row = [sorted_by_y[0]]
-            for i in range(1, len(sorted_by_y)):
-                # Сравниваем Y текущего элемента с Y последнего элемента в текущем ряду
-                if sorted_by_y[i]["pos"][1] - current_row[-1]["pos"][1] < threshold:
-                    current_row.append(sorted_by_y[i])
+            last_y = sorted_by_y[0].get("pos", (0, 0, 0, 0))[1]
+            
+            for item in sorted_by_y[1:]:
+                curr_y = item.get("pos", (0, 0, 0, 0))[1]
+                if abs(curr_y - last_y) < threshold:
+                    current_row.append(item)
                 else:
-                    rows.append(current_row)
-                    current_row = [sorted_by_y[i]]
-            rows.append(current_row)
-
-        # 2. Внутри каждого ряда сортируем по X (слева направо)
+                    rows.append(sorted(current_row, key=lambda x: x.get("pos", (0, 0, 0, 0))[0]))
+                    current_row = [item]
+                    last_y = curr_y
+            rows.append(sorted(current_row, key=lambda x: x.get("pos", (0, 0, 0, 0))[0]))
+            
         final_sorted = []
         for row in rows:
-            row.sort(key=lambda v: v["pos"][0])
             final_sorted.extend(row)
-
         return final_sorted
+
+    def _spatial_sort_strict(self, items: list) -> list:
+        """
+        Строгая вертикальная сортировка элементов контента.
+        Используется для соблюдения хронологического порядка (сверху вниз)
+        в текстовой панели (текст, таблицы, формулы).
+        """
+        if not items:
+            return []
+        # Сортируем по координате Y (top), затем по X (left)
+        return sorted(items, key=lambda x: (x.get("pos", (0, 0))[0], x.get("pos", (0, 0))[1]))
 
     def get_icon_by_text(self, text: str) -> str:
         """Возвращает идентификатор иконки на основе текста (по ключевым словам)."""
@@ -1451,7 +1537,7 @@ class PPTConverter:
                         "layout_type": "conclusions_dual",
                         "left_html": left_html,
                         "right_html": right_html,
-                        "plain_text": [],
+                        "content_items": [],
                     }
                 )
             elif config["type"] == "research":
@@ -1466,7 +1552,7 @@ class PPTConverter:
                         "title": "Направление дальнейших исследований",
                         "layout_type": "research_roadmap",
                         "content_html": "".join(items_html),
-                        "plain_text": [],
+                        "content_items": [],
                     }
                 )
 
@@ -1783,13 +1869,20 @@ class PPTConverter:
                 
                 target = normalize(best_match["text"])
                 
-                new_plain_text = []
-                for p in slide_info["plain_text"]:
-                    # Считаем текст самого параграфа
-                    p_text = normalize("".join(s for s in p if not s.startswith("\0")))
-                    if p_text != target:
-                        new_plain_text.append(p)
-                slide_info["plain_text"] = new_plain_text
+                new_items = []
+                for item in slide_info.get("content_items", []):
+                    if item["type"] == "text":
+                        new_paras = []
+                        for p in item["data"]:
+                            p_text = normalize("".join(s for s in p if isinstance(s, str) and not s.startswith("[[[")))
+                            if p_text != target:
+                                new_paras.append(p)
+                        if new_paras:
+                            item["data"] = new_paras
+                            new_items.append(item)
+                    else:
+                        new_items.append(item)
+                slide_info["content_items"] = new_items
                 if best_score - second_best_score < 0.1 and second_best_score > 0:
                     logger.warning(
                         f"Slide {slide_num}: ambiguous caption (score diff {best_score - second_best_score:.3f})"
@@ -1800,169 +1893,122 @@ class PPTConverter:
                 )
 
     def _omml_to_mathml(self, omath_elem) -> str:
-        """Рекурсивно конвертирует OMML элемент в MathML строку.
-        Поддерживает основные теги: m:r, m:t, m:sSub, m:sSup, m:sSubSup, m:f, m:nary, m:acc, m:e.
-        Возвращает строку MathML или пустую строку при ошибке.
-        """
-
-        # Helper: determine token type from text
+        """Рекурсивно конвертирует OMML в MathML (без внешних библиотек)."""
+        OMML_NS = "{http://schemas.openxmlformats.org/officeDocument/2006/math}"
+        
         def token_type(txt: str) -> str:
-            if txt.isdigit():
+            if txt.isdigit() or txt.replace('.', '').isdigit():
                 return "mn"
-            # operators set
             ops = set("+-*/=<>≤≥≈≡∑∏∫∂∇±×÷∈∉⊂⊃∪∩∧∨¬∞∂")
             if txt in ops:
                 return "mo"
             return "mi"
 
-        # Recursive conversion
-        def convert(elem) -> str:
-            tag = elem.tag
-            if tag == f"{OMML_NS}oMath" or tag == f"{OMML_NS}oMathPara":
-                # Root: wrap everything in <math>
+        def convert(elem):
+            if elem is None:
+                return ""
+            tag = elem.tag.replace(OMML_NS, '')
+            if tag == 'oMath' or tag == 'oMathPara':
                 children = "".join(convert(c) for c in elem)
                 return f'<math xmlns="http://www.w3.org/1998/Math/MathML">{children}</math>'
-            elif tag == f"{OMML_NS}r":
-                # Run: contains m:t (text) and possibly formatting
-                children = list(elem)
-                if children:
-                    # Concatenate all text children
-                    texts = []
-                    for c in children:
-                        if c.tag == f"{OMML_NS}t":
-                            texts.append(c.text or "")
-                        # Could handle m:br etc.
-                    txt = "".join(texts)
-                    if txt:
-                        return (
-                            f"<{token_type(txt)}>{html.escape(txt)}</{token_type(txt)}>"
-                        )
-                return ""
-            elif tag == f"{OMML_NS}t":
-                # Text node: rarely direct child except inside r; handled above
-                return html.escape(elem.text or "")
-            elif tag == f"{OMML_NS}sSub":
-                # Subscript: <msub><m:ei/></msub>
-                children = list(elem)
-                base = ""
-                sub = ""
-                for c in children:
-                    if c.tag == f"{OMML_NS}e":
-                        base = convert(c)
-                    elif c.tag == f"{OMML_NS}sub":
-                        sub = convert(c)
-                return f"<msub>{base}{sub}</msub>"
-            elif tag == f"{OMML_NS}sSup":
-                children = list(elem)
-                base = ""
-                sup = ""
-                for c in children:
-                    if c.tag == f"{OMML_NS}e":
-                        base = convert(c)
-                    elif c.tag == f"{OMML_NS}sup":
-                        sup = convert(c)
-                return f"<msup>{base}{sup}</msup>"
-            elif tag == f"{OMML_NS}sSubSup":
-                children = list(elem)
-                base = ""
-                sub = ""
-                sup = ""
-                for c in children:
-                    if c.tag == f"{OMML_NS}e":
-                        base = convert(c)
-                    elif c.tag == f"{OMML_NS}sub":
-                        sub = convert(c)
-                    elif c.tag == f"{OMML_NS}sup":
-                        sup = convert(c)
-                return f"<msubsup>{base}{sub}{sup}</msubsup>"
-            elif tag == f"{OMML_NS}f":
-                # Fraction: numerator and denominator
-                num, den = "", ""
-                for c in elem:
-                    if c.tag == f"{OMML_NS}num":
-                        num = convert(c)
-                    elif c.tag == f"{OMML_NS}den":
-                        den = convert(c)
-                return f"<mfrac>{num}{den}</mfrac>"
-            elif tag == f"{OMML_NS}nary":
-                # N-ary operator (sum, product, integral)
-                # Structure: <m:nary><m:chr>∑</m:chr><m:lim>...</m:lim><m:e>...</m:e></m:nary>
-                op = ""
-                sub = ""
-                sup = ""
-                elem_content = ""
-                for c in elem:
-                    if c.tag == f"{OMML_NS}chr":
-                        op = html.escape(c.text or "∑")
-                    elif c.tag == f"{OMML_NS}lim":
-                        # lim contains sub and sup
-                        for l in c:
-                            if l.tag == f"{OMML_NS}sub":
-                                sub = convert(l)
-                            elif l.tag == f"{OMML_NS}sup":
-                                sup = convert(l)
-                    elif c.tag == f"{OMML_NS}e":
-                        elem_content = convert(c)
-                # Render as <munderover><mo>op</mo>sub sup</munderover>elem
-                if sub or sup:
-                    return f"<munderover><mo>{op}</mo>{sub}{sup}</munderover>{elem_content}"
+            elif tag == 'r':
+                texts = []
+                for t in elem.findall(f'.//{OMML_NS}t'):
+                    if t.text:
+                        texts.append(t.text)
+                txt = ''.join(texts)
+                if txt:
+                    tt = token_type(txt)
+                    return f'<{tt}>{html.escape(txt)}</{tt}>'
+                return ''
+            elif tag == 't':
+                return html.escape(elem.text or '')
+            elif tag == 'sSub':
+                base = convert(elem.find(f'{OMML_NS}e'))
+                sub = convert(elem.find(f'{OMML_NS}sub'))
+                return f'<msub><mrow>{base}</mrow><mrow>{sub}</mrow></msub>'
+            elif tag == 'sSup':
+                base = convert(elem.find(f'{OMML_NS}e'))
+                sup = convert(elem.find(f'{OMML_NS}sup'))
+                return f'<msup><mrow>{base}</mrow><mrow>{sup}</mrow></msup>'
+            elif tag == 'sSubSup':
+                base = convert(elem.find(f'{OMML_NS}e'))
+                sub = convert(elem.find(f'{OMML_NS}sub'))
+                sup = convert(elem.find(f'{OMML_NS}sup'))
+                return f'<msubsup><mrow>{base}</mrow><mrow>{sub}</mrow><mrow>{sup}</mrow></msubsup>'
+            elif tag == 'f':
+                num = convert(elem.find(f'{OMML_NS}num'))
+                den = convert(elem.find(f'{OMML_NS}den'))
+                return f'<mfrac><mrow>{num}</mrow><mrow>{den}</mrow></mfrac>'
+            elif tag == 'rad':
+                deg = elem.find(f'{OMML_NS}deg')
+                e = convert(elem.find(f'{OMML_NS}e'))
+                if deg is not None:
+                    deg_val = convert(deg)
+                    return f'<mroot><mrow>{e}</mrow><mrow>{deg_val}</mrow></mroot>'
                 else:
-                    return f"<mn>{op}</mn>{elem_content}"
-            elif tag == f"{OMML_NS}acc":
-                # Accent (hat, bar, etc.)
-                # <m:acc><m:chr>^</m:chr><m:e>...</m:e></m:acc>
-                acc_char = ""
-                elem_content = ""
-                for c in elem:
-                    if c.tag == f"{OMML_NS}chr":
-                        acc_char = html.escape(c.text or "")
-                    elif c.tag == f"{OMML_NS}e":
-                        elem_content = convert(c)
-                return f"<mover>{elem_content}<mo>{acc_char}</mo></mover>"
-            elif tag == f"{OMML_NS}d":
-                # Delimiter: <m:d><m:dPr><m:begChr>(</m:begChr><m:endChr>)</m:endChr></m:dPr><m:e>...</m:e></m:d>
-                beg, end = "(", ")"
-                dPr = elem.find(f"{OMML_NS}dPr")
+                    return f'<msqrt><mrow>{e}</mrow></msqrt>'
+            elif tag == 'd':
+                # Delimiters (parentheses, brackets)
+                dPr = elem.find(f'{OMML_NS}dPr')
+                beg = '('
+                end = ')'
                 if dPr is not None:
-                    beg_elem = dPr.find(f"{OMML_NS}begChr")
-                    end_elem = dPr.find(f"{OMML_NS}endChr")
-                    if beg_elem is not None: beg = beg_elem.get(f"{OMML_NS}val", "(")
-                    if end_elem is not None: end = end_elem.get(f"{OMML_NS}val", ")")
-                
-                content = ""
-                for c in elem:
-                    if c.tag == f"{OMML_NS}e":
-                        content = convert(c)
-                return f"<mrow><mo>{html.escape(beg)}</mo>{content}<mo>{html.escape(end)}</mo></mrow>"
-            elif tag == f"{OMML_NS}e":
-                # Element wrapper - just recurse children
+                    begChr = dPr.find(f'{OMML_NS}begChr')
+                    endChr = dPr.find(f'{OMML_NS}endChr')
+                    if begChr is not None and begChr.get('val'):
+                        beg = begChr.get('val')
+                    if endChr is not None and endChr.get('val'):
+                        end = endChr.get('val')
+                content = convert(elem.find(f'{OMML_NS}e'))
+                return f'<mrow><mo>{html.escape(beg)}</mo><mrow>{content}</mrow><mo>{html.escape(end)}</mo></mrow>'
+            elif tag == 'eqArr':
+                # Система уравнений
+                rows = []
+                for e in elem.findall(f'{OMML_NS}e'):
+                    rows.append(convert(e))
+                return f'<mtable>{"".join(f"<mtr><mtd><mrow>{r}</mrow></mtd></mtr>" for r in rows)}</mtable>'
+            elif tag == 'nary':
+                # Sum, integral, etc. (munderover)
+                chr_elem = elem.find(f'{OMML_NS}chr')
+                op = chr_elem.get('val') if chr_elem is not None else '∑'
+                sub = convert(elem.find(f'{OMML_NS}sub'))
+                sup = convert(elem.find(f'{OMML_NS}sup'))
+                e = convert(elem.find(f'{OMML_NS}e'))
+                if sub or sup:
+                    # munderover expects 3 arguments: base, lower, upper
+                    # We ensure each is a single child using <mrow>
+                    s = sub if sub else '<mrow></mrow>'
+                    sp = sup if sup else '<mrow></mrow>'
+                    return f'<munderover><mrow><mo>{html.escape(op)}</mo></mrow><mrow>{s}</mrow><mrow>{sp}</mrow></munderover><mrow>{e}</mrow>'
+                else:
+                    return f'<mo>{html.escape(op)}</mo><mrow>{e}</mrow>'
+            elif tag == 'acc':
+                # Accent (hat, bar) - mover
+                chr_elem = elem.find(f'{OMML_NS}chr')
+                acc = chr_elem.get('val') if chr_elem is not None else '̂'
+                base = convert(elem.find(f'{OMML_NS}e'))
+                return f'<mover><mrow>{base}</mrow><mrow><mo>{html.escape(acc)}</mo></mrow></mover>'
+            elif tag == 'box':
+                return f'<mrow>{convert(elem.find(f"{OMML_NS}e"))}</mrow>'
+            elif tag == 'e':
                 return "".join(convert(c) for c in elem)
-            elif tag == f"{OMML_NS}del":
-                # del is often used for deleted content, ignore
-                return ""
-            elif tag == f"{OMML_NS}lim":
-                # Limits (sub/sup)
-                sub, sup = "", ""
-                for c in elem:
-                    if c.tag == f"{OMML_NS}sub":
-                        sub = convert(c)
-                    elif c.tag == f"{OMML_NS}sup":
-                        sup = convert(c)
-                return f"<msubsup>{sub}{sup}</msubsup>"
-            # Add more as needed
-            # For unknown tags, attempt to process children
-            return "".join(convert(c) for c in elem)
-
+            else:
+                # Рекурсивно обрабатываем дочерние элементы
+                return "".join(convert(c) for c in elem)
+        
         try:
             return convert(omath_elem)
         except Exception as e:
-            logger.warning(f"OMML→MathML conversion error: {e}")
+            logger.warning(f"OMML conversion failed: {e}")
+            # Fallback
+            texts = [t.text for t in omath_elem.findall(f'.//{OMML_NS}t') if t.text]
+            if texts:
+                return f'<span class="formula-fallback">{esc("".join(texts))}</span>'
             return ""
 
     def _extract_math_segments_from_textframe(self, text_frame) -> list[str]:
-        """Извлекает сегменты текста и отдельные формулы (OMML) из текстового фрейма.
-        Возвращает список: обычные строки (текст) или спец-маркеры.
-        """
+        """Извлекает сегменты текста и отдельные формулы (OMML) из текстового фрейма."""
         NS = {
             "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
             "a14": "http://schemas.microsoft.com/office/drawing/2014/main",
@@ -1971,13 +2017,11 @@ class PPTConverter:
         }
         all_paragraphs = []
         for para in text_frame.paragraphs:
-            # --- НОВОЕ: Обнаружение буллитов из свойств абзаца PPTX ---
-            # Большинство буллитов в PPTX не являются символами в тексте
+            # Обнаружение буллитов
             is_legal_bullet = False
             if para.level > 0:
                 is_legal_bullet = True
             else:
-                # Проверка XML свойств pPr на наличие буллитов (buChar, buAutoNum и др.)
                 pPr = para._element.pPr
                 if pPr is not None:
                     has_bu = any(child.tag.endswith(('buChar', 'buAutoNum', 'buBlip', 'buBullet')) 
@@ -1989,75 +2033,112 @@ class PPTConverter:
             segments = []
             current_text = []
 
+            def extract_mathml_from_element(elem):
+                """Извлекает MathML из OMML-элемента или возвращает None."""
+                mathml = self._omml_to_mathml(elem)
+                if mathml:
+                    return f"[[[MML_START]]]{mathml}[[[MML_END]]]"
+                else:
+                    linear_parts = [t.text for t in elem.findall(".//m:t", NS) if t.text]
+                    if linear_parts:
+                        return f"[[[MML_FB_START]]]{''.join(linear_parts)}[[[MML_FB_END]]]"
+                return None
+
             for child in p_elem:
                 local = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+                
+                # 1. Обработка обычных текстовых runs
                 if local == "r":
-                    # Check for formula
+                    # Проверяем на OMML внутри run
                     omath = child.find(".//m:oMath", NS) or child.find(".//m:oMathPara", NS)
                     if omath is None:
                         omath = child.find(".//mc:AlternateContent/mc:Choice//m:oMath", NS) or \
                                 child.find(".//mc:AlternateContent/mc:Choice//m:oMathPara", NS)
-                    
                     if omath is not None:
                         if current_text:
                             segments.append("".join(current_text))
                             current_text = []
-                        mathml = self._omml_to_mathml(omath)
-                        if mathml:
-                            segments.append(f"\0MATHML_BEGIN\0{mathml}\0MATHML_END\0")
-                        else:
-                            linear_parts = [t.text for t in omath.findall(".//m:t", NS) if t.text]
-                            linear_text = "".join(linear_parts)
-                            if linear_text:
-                                segments.append(f"\0FORMULA_FALLBACK\0{linear_text}\0END\0")
+                        result = extract_mathml_from_element(omath)
+                        if result:
+                            segments.append(result)
                         continue
-
-                    # Regular text
+                    
+                    # Обычный текст + проверка на подстрочные/надстрочные знаки (a:rPr baseline)
                     t_elems = child.findall(".//a:t", NS)
                     txt = "".join(t.text or "" for t in t_elems)
                     if txt:
+                        # Проверяем rPr на baseline
+                        rPr = child.find(".//a:rPr", NS)
+                        if rPr is not None:
+                            bl = rPr.get("baseline")
+                            is_sub = rPr.get("subscript") in ("1", "true", True)
+                            is_sup = rPr.get("superscript") in ("1", "true", True)
+                            if bl:
+                                try:
+                                    val = int(bl)
+                                    if val < 0: is_sub = True
+                                    elif val > 0: is_sup = True
+                                except: pass
+                            
+                            if is_sub:
+                                txt = f"<sub>{txt}</sub>"
+                            elif is_sup:
+                                txt = f"<sup>{txt}</sup>"
                         current_text.append(txt)
+                
+                # 2. Обработка переноса строки
                 elif local == "br":
                     current_text.append("\n")
-                else:
-                    omath = None
-                    if child.tag.endswith("}oMath") or child.tag.endswith("}oMathPara"):
-                        omath = child
-                    else:
-                        omath = child.find(".//m:oMath", NS) or child.find(".//m:oMathPara", NS)
-                        if omath is None:
-                            omath = child.find(".//mc:AlternateContent/mc:Choice//m:oMath", NS) or \
-                                    child.find(".//mc:AlternateContent/mc:Choice//m:oMathPara", NS)
-                    
+                
+                # 3. Обработка контейнера <a14:m> (ключевое!)
+                elif local == "m" and child.tag == f"{{{NS['a14']}}}m":
+                    # Ищем OMML внутри <a14:m>
+                    omath = child.find(".//m:oMath", NS) or child.find(".//m:oMathPara", NS)
                     if omath is not None:
                         if current_text:
                             segments.append("".join(current_text))
                             current_text = []
-                        mathml = self._omml_to_mathml(omath)
-                        if mathml:
-                            segments.append(f"\0MATHML_BEGIN\0{mathml}\0MATHML_END\0")
-                        else:
-                            linear_parts = [t.text for t in omath.findall(".//m:t", NS) if t.text]
-                            linear_text = "".join(linear_parts)
-                            if linear_text:
-                                segments.append(f"\0FORMULA_FALLBACK\0{linear_text}\0END\0")
+                        result = extract_mathml_from_element(omath)
+                        if result:
+                            segments.append(result)
+                    # Пропускаем сам элемент, т.к. содержимое уже обработано
+                    continue
+                
+                # 4. Обработка прямого OMML (на всякий случай)
+                elif local in ("oMath", "oMathPara"):
+                    if current_text:
+                        segments.append("".join(current_text))
+                        current_text = []
+                    result = extract_mathml_from_element(child)
+                    if result:
+                        segments.append(result)
+                    continue
+                
+                # 5. Неизвестные элементы – рекурсивно ищем в них OMML
+                else:
+                    omath = child.find(".//m:oMath", NS) or child.find(".//m:oMathPara", NS)
+                    if omath is not None:
+                        if current_text:
+                            segments.append("".join(current_text))
+                            current_text = []
+                        result = extract_mathml_from_element(omath)
+                        if result:
+                            segments.append(result)
 
             if current_text:
                 segments.append("".join(current_text))
             
-            # --- НОВОЕ: Внедрение маркера, если это свойство абзаца (согласно плану) ---
-            if sequences := segments: # use local alias for clarity
+            # Добавление маркера для буллитов
+            if segments:
                 if is_legal_bullet:
-                    # Проверяем, не начинается ли уже текст с маркера
-                    first_seg = sequences[0]
-                    if not first_seg.startswith("\0"): # Если не формула
+                    first_seg = segments[0]
+                    if not first_seg.startswith("[[[") and not first_seg.startswith("\0"):
                         bullet_chars = set(DESIGN_CONFIG.get("bullet_lists", {}).get("icon_map", {}).keys())
                         stripped = first_seg.lstrip()
                         if not (stripped and stripped[0] in bullet_chars):
-                            sequences[0] = "• " + first_seg
-
-            if segments:
+                            segments[0] = "• " + first_seg
                 all_paragraphs.append(segments)
+        
         return all_paragraphs
 
     def _paragraph_to_html(self, paragraph) -> str:
@@ -2083,20 +2164,16 @@ class PPTConverter:
                 if omath is not None:
                     mathml = self._omml_to_mathml(omath)
                     if mathml:
-                        parts.append(
-                            f'<span class="formula-container"><math xmlns="http://www.w3.org/1998/Math/MathML">{mathml}</math></span>'
-                        )
+                        # FIXED: Remove redundant <math> wrapper as _omml_to_mathml already provides it
+                        parts.append(f'<span class="formula-container">{mathml}</span>')
                     else:
                         # Fallback: linear Unicode text from OMML
-                        linear_parts = [
-                            t.text for t in omath.findall(".//m:t", NS) if t.text
-                        ]
+                        linear_parts = [t.text for t in omath.findall(".//m:t", NS) if t.text]
                         linear_text = "".join(linear_parts)
                         if linear_text:
-                            parts.append(
-                                f'<span class="formula-fallback">{html.escape(linear_text)}</span>'
-                            )
+                            parts.append(f'<span class="formula-fallback">{html.escape(linear_text)}</span>')
                     continue
+
                 # Regular text run
                 t_elems = child.findall(".//a:t", NS)
                 txt = "".join(t.text or "" for t in t_elems)
@@ -2108,7 +2185,6 @@ class PPTConverter:
                 bold = False
                 italic = False
                 if rPr is not None:
-                    # DrawingML baseline attribute: 30000 = sup, -25000 = sub (approx)
                     baseline = rPr.get("baseline")
                     if baseline:
                         try:
@@ -2117,52 +2193,34 @@ class PPTConverter:
                             elif val < 0: sub = True
                         except: pass
                     
-                    # Also check literal attributes if they exist
                     if not sub: sub = rPr.get("subscript") in ("1", "true", True)
                     if not sup: sup = rPr.get("superscript") in ("1", "true", True)
-                    
                     bold = rPr.get("b") in ("1", "true", True)
                     italic = rPr.get("i") in ("1", "true", True)
-                if sub:
-                    parts.append(f"<sub>{html.escape(txt)}</sub>")
-                elif sup:
-                    parts.append(f"<sup>{html.escape(txt)}</sup>")
-                else:
-                    if bold and italic:
-                        parts.append(f"<strong><em>{html.escape(txt)}</em></strong>")
-                    elif bold:
-                        parts.append(f"<strong>{html.escape(txt)}</strong>")
-                    elif italic:
-                        parts.append(f"<em>{html.escape(txt)}</em>")
-                    else:
-                        parts.append(html.escape(txt))
+                
+                content = html.escape(txt)
+                if sub: content = f"<sub>{content}</sub>"
+                elif sup: content = f"<sup>{content}</sup>"
+                if bold: content = f"<strong>{content}</strong>"
+                if italic: content = f"<em>{content}</em>"
+                parts.append(content)
+
             elif local == "br":
                 parts.append("<br/>")
             elif local in ("endParaRPr", "extLst"):
                 continue
             else:
-                omath = None
-                if child.tag.endswith("}oMath") or child.tag.endswith("}oMathPara"):
-                    omath = child
-                else:
-                    omath = child.find(".//m:oMath", NS) or child.find(
-                        ".//m:oMathPara", NS
-                    )
+                omath = child.find(".//m:oMath", NS) or child.find(".//m:oMathPara", NS)
                 if omath is not None:
                     mathml = self._omml_to_mathml(omath)
                     if mathml:
-                        parts.append(
-                            f'<span class="formula-container"><math xmlns="http://www.w3.org/1998/Math/MathML">{mathml}</math></span>'
-                        )
+                        # FIXED: Remove redundant <math> wrapper
+                        parts.append(f'<span class="formula-container">{mathml}</span>')
                     else:
-                        linear_parts = [
-                            t.text for t in omath.findall(".//m:t", NS) if t.text
-                        ]
+                        linear_parts = [t.text for t in omath.findall(".//m:t", NS) if t.text]
                         linear_text = "".join(linear_parts)
                         if linear_text:
-                            parts.append(
-                                f'<span class="formula-fallback">{html.escape(linear_text)}</span>'
-                            )
+                            parts.append(f'<span class="formula-fallback">{html.escape(linear_text)}</span>')
         return "".join(parts)
 
     def _table_to_html(self, table) -> str:
@@ -2191,6 +2249,56 @@ class PPTConverter:
             return parts[0].strip(), "\n".join(parts[1:]).strip()
         return name, ""
 
+    def _iter_slide_shapes(self, slide):
+        """
+        Итерируется по всем фигурам слайда, включая те, что скрыты в mc:AlternateContent.
+        Возвращает кортежи (shape_obj, xml_element). 
+        Если фигура стандартная, shape_obj — объект BaseShape, xml_element — его _element.
+        Если фигура скрыта в AlternateContent, shape_obj может быть None.
+        """
+        NS = {
+            "p": "http://schemas.openxmlformats.org/presentationml/2006/main",
+            "mc": "http://schemas.openxmlformats.org/markup-compatibility/2006",
+        }
+        
+        # Сначала собираем все стандартные фигуры и их ID
+        standard_shapes = {}
+        for s in slide.shapes:
+            try:
+                standard_shapes[s.shape_id] = s
+            except:
+                pass
+        
+        # Получаем XML дерево слайда
+        spTree = slide.shapes._spTree
+        
+        def process_container(container):
+            for child in container:
+                # Если это фигура
+                tag = child.tag.split('}')[-1]
+                if tag in ('sp', 'pic', 'graphicFrame', 'grpSp', 'cxnSp'):
+                    # Проверяем, есть ли она в стандартном списке
+                    # Для этого ищем cNvPr и его id
+                    cNvPr = child.find('.//p:cNvPr', {"p": NS["p"]})
+                    s_id = int(cNvPr.get('id')) if cNvPr is not None and cNvPr.get('id') else None
+                    
+                    if s_id in standard_shapes:
+                        yield standard_shapes[s_id], child
+                    else:
+                        yield None, child
+                
+                # Если это AlternateContent
+                elif tag == 'AlternateContent':
+                    choice = child.find(f".//{{{NS['mc']}}}Choice")
+                    if choice is not None:
+                        yield from process_container(choice)
+                
+                # Если это группа (рекурсивно)
+                elif tag == 'grpSp':
+                    yield from process_container(child)
+
+        yield from process_container(spTree)
+
     def extract_content(self) -> None:
         """Извлекает все данные из PowerPoint-файла в self.slides_data."""
         logger.info(f"Чтение презентации: {self.ppt_path}")
@@ -2202,42 +2310,82 @@ class PPTConverter:
             slide_info = {
                 "title": "",
                 "layout_type": "default",
-                "plain_text": [],
+                "content_items": [],  # Unified list for interleaving: {type: 'text'|'table'|'formula', data: ..., pos: (y, x)}
                 "visuals": [],
-                "tables_html": [],
                 "is_active": True,
-                "slide_num": i + 1,  # for logging
+                "slide_num": i + 1,
             }
-
+       
             if slide.shapes.title:
                 slide_info["title"] = slide.shapes.title.text
 
-            for shape in slide.shapes:
-                if shape.has_text_frame and shape != slide.shapes.title:
-                    # Extract text and formulas using low-level parsing
+            # Общий проход по всем фигурам (включая скрытые)
+            for shape, elem in self._iter_slide_shapes(slide):
+                pos = (0, 0)
+                if shape:
                     try:
-                        all_paragraphs = self._extract_math_segments_from_textframe(
-                            shape.text_frame
-                        )
-                        f_count = 0
-                        for para_segs in all_paragraphs:
-                            f_count += sum(1 for s in para_segs if s.startswith("\0MATHML_BEGIN\0"))
-                            slide_info["plain_text"].append(para_segs)
-                        
-                        if f_count:
-                            logger.info(
-                                f"Slide {i + 1}: shape '{shape.name}' → {f_count} formulas"
-                            )
-                    except Exception as e:
-                        logger.warning(
-                            f"Slide {i + 1}: error extracting text/math from shape: {e}"
-                        )
-                        # Fallback to plain text
-                        txt = shape.text.strip()
-                        if txt and not self._is_slide_number(txt):
-                            slide_info["plain_text"].append(txt)
+                        pos = (shape.top, shape.left)
+                    except: pass
+                
+                # Пропускаем заголовок слайда (он обрабатывается отдельно)
+                if shape == slide.shapes.title:
+                    continue
 
-                elif shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
+                # 1. СТАНДАРТНЫЙ ТЕКСТ (Text Frame)
+                if shape and shape.has_text_frame:
+                    try:
+                        all_paragraphs = self._extract_math_segments_from_textframe(shape.text_frame)
+                        if all_paragraphs:
+                            slide_info["content_items"].append({
+                                "type": "text",
+                                "data": all_paragraphs,
+                                "pos": pos
+                            })
+                            # Статистика
+                            for para in all_paragraphs:
+                                f_count = sum(1 for s in para if isinstance(s, str) and (s.startswith("[[[MML_START]]]") or s.startswith("[[[MML_FB_START]]]")))
+                                self.stats["formulas"] += f_count
+                    except Exception as e:
+                        logger.warning(f"Slide {i + 1}: error extracting text from shape: {e}")
+
+                # 2. ТАБЛИЦЫ
+                elif shape and shape.has_table:
+                    try:
+                        table_html = self._table_to_html(shape.table)
+                        slide_info["content_items"].append({
+                                "type": "table",
+                                "data": table_html,
+                                "pos": pos
+                        })
+                        self.stats["tables"] += 1
+                    except Exception as e:
+                        logger.error(f"Slide {i + 1}: table error: {e}")
+
+                # 3. ФОРМУЛЫ (Standalone OMML / OLE с OMML)
+                else:
+                    NS_M = {"m": "http://schemas.openxmlformats.org/officeDocument/2006/math"}
+                    omath = elem.find('.//m:oMath', NS_M) or elem.find('.//m:oMathPara', NS_M)
+                    if omath is not None:
+                        try:
+                            # Пытаемся извлечь позицию из XML, если shape=None
+                            if not shape:
+                                off = elem.find('.//a:off', {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"})
+                                if off is not None:
+                                    pos = (int(off.get('y', 0)), int(off.get('x', 0)))
+                            
+                            mathml = self._omml_to_mathml(omath)
+                            if mathml:
+                                slide_info["content_items"].append({
+                                    "type": "formula",
+                                    "data": mathml,
+                                    "pos": pos
+                                })
+                                self.stats["formulas"] += 1
+                        except Exception as e:
+                            logger.warning(f"Slide {i + 1}: standalone math extraction failed: {e}")
+
+                # 4. ИЗОБРАЖЕНИЯ (Остаются в visuals для отдельного рендеринга справа)
+                if shape and shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
                     img_name = f"slide_{i + 1}_img_{len(slide_info['visuals']) + 1}.png"
                     img_path_full = str(Path(media_output_full) / img_name)
                     img_path_rel = (
@@ -2378,83 +2526,60 @@ class PPTConverter:
                         logger.error(f"[IMG] Ошибка на слайде {i + 1}: {e}")
                         self.stats["images_fail"] += 1
 
-                elif shape.has_table:
-                    table_html = self._table_to_html(shape.table)
-                    slide_info["tables_html"].append(table_html)
-                    self.stats["tables"] += 1
+                # OLE objects support
+                else:
+                    try:
+                        if shape and hasattr(shape, "ole_format") and shape.ole_format is not None:
+                            # Deep scanning for OMML already covered by search loop
+                            pass
+                    except (ValueError, AttributeError):
+                        pass
 
-                # OLE objects (e.g., embedded equations) are not images; skip with warning
-                elif hasattr(shape, "ole_format") and shape.ole_format is not None:
-                    logger.warning(
-                        f"Slide {i + 1}: OLE object '{shape.name}' skipped (not an image)"
-                    )
-                    self.stats["ole_skipped"] = self.stats.get("ole_skipped", 0) + 1
+            # Применяем строгую пространственную сортировку ко всему контенту
+            slide_info["content_items"] = self._spatial_sort_strict(slide_info["content_items"])
+            # Сортировка изображений (остается стандартной)
+            slide_info["visuals"] = self._spatial_sort(slide_info["visuals"])
 
-            if (
-                not slide_info["visuals"]
-                and not slide_info["title"]
-                and not slide_info["tables_html"]
-                and not slide_info["plain_text"]
-            ):
-                logger.debug(f"Слайд {i + 1} пропущен: нет контента")
-                continue
-
+            # Очистка и доп. логика для интро-слайда
             if i == 0:
                 slide_info["layout_type"] = "intro"
-                
-                # Собираем все текстовые блоки первого слайда (кроме заголовка)
                 presenter_items = []
-                for idx, item in enumerate(slide_info["plain_text"]):
-                    txt = "".join(s for s in item if not s.startswith("\0")) if isinstance(item, list) else str(item)
-                    txt = txt.strip()
-                    if not txt: continue
-                    
-                    if idx == 0:
-                        slide_info["title"] = txt
-                    else:
-                        presenter_items.append(txt)
+                for item in slide_info["content_items"]:
+                    if item["type"] == "text":
+                        for p in item["data"]:
+                            txt = "".join(s for s in p if not s.startswith("[[[") ).strip()
+                            if txt: presenter_items.append(txt)
                 
-                # Объединяем и чистим через существующий помощник
-                full_text = "\n".join(presenter_items)
-                name, info = self._clean_speaker_name(full_text)
-                
-                # Для формирования имени файла и карточки
-                if name:
-                    # Сохраняем "дисплейное" имя без ПНИПУ (как в презентации)
-                    slide_info["speaker_name"] = name
+                if presenter_items:
+                    slide_info["title"] = presenter_items[0]
+                    name, info = self._clean_speaker_name("\n".join(presenter_items[1:]))
+                    slide_info["speaker_name"] = name if name else "Докладчик"
                     slide_info["speaker_info"] = info
                 else:
-                    # Если имя не выделилось (пусто), берем что есть
                     slide_info["speaker_name"] = "Докладчик"
-                    slide_info["speaker_info"] = full_text
-
-                slide_info["plain_text"] = [] 
+                    slide_info["speaker_info"] = ""
 
             elif len(slide_info["visuals"]) == 2:
                 slide_info["layout_type"] = "two_images"
-            elif len(slide_info["visuals"]) == 0 and not slide_info["tables_html"]:
-                slide_info["layout_type"] = "full_text"
+            elif len(slide_info["visuals"]) == 0:
+                # Проверяем наличие таблиц в content_items
+                has_table = any(it["type"] == "table" for it in slide_info["content_items"])
+                if not has_table:
+                    slide_info["layout_type"] = "full_text"
 
             if slide_info["visuals"]:
                 self._extract_captions_from_shapes(slide, slide_info)
 
-            # Подсчёт и логирование формул для текущего слайда
-            m_count = 0
-            f_count_fallback = 0
-            for item in slide_info["plain_text"]:
-                if isinstance(item, list):
-                    m_count += sum(1 for s in item if s.startswith("\0MATHML_BEGIN\0"))
-                    f_count_fallback += sum(1 for s in item if s.startswith("\0FORMULA_FALLBACK\0"))
-                elif isinstance(item, str):
-                    if item.startswith("\0MATHML_BEGIN\0"): m_count += 1
-                    if item.startswith("\0FORMULA_FALLBACK\0"): f_count_fallback += 1
+            # Логирование формул
+            f_total = sum(1 for it in slide_info["content_items"] if it["type"] == "formula")
+            # Считаем встроенные формулы
+            for it in slide_info["content_items"]:
+                if it["type"] == "text":
+                    for p in it["data"]:
+                        f_total += sum(1 for s in p if isinstance(s, str) and s.startswith("[[[MML"))
             
-            total_f = m_count + f_count_fallback
-            if total_f > 0:
-                logger.info(
-                    f"Slide {slide_info['slide_num']}: {total_f} formulas "
-                    f"(MathML: {m_count}, fallback: {f_count_fallback})"
-                )
+            if f_total > 0:
+                logger.info(f"Slide {slide_info['slide_num']}: total {f_total} formulas found.")
 
             self.slides_data.append(slide_info)
 
@@ -2463,11 +2588,11 @@ class PPTConverter:
     def _generate_section_tag(self, data: dict) -> str:
         """Генерирует тег секции (например, "Данные", "Результаты") на основе текста."""
         all_texts = []
-        for p in data["plain_text"]:
-            if isinstance(p, list):
-                all_texts.append(" ".join(s for s in p if not s.startswith("\0")))
-            else:
-                all_texts.append(p)
+        for block in data.get("content_items", []):
+            if block["type"] == "text":
+                for p in block["data"]:
+                    all_texts.append(" ".join(s for s in p if not s.startswith("[[[") ))
+        
         text_combined = " ".join(all_texts).lower()
         if any(kw in text_combined for kw in ["данные", "таблиц", "исходн"]):
             return "Данные"
@@ -2479,85 +2604,88 @@ class PPTConverter:
             return "Анализ"
         return "Описание"
 
-    def _format_text_panel(self, plain_text: list, tables_html: list = None) -> str:
-        """Формирует HTML-панель с текстовыми пунктами и таблицами.
-        Поддерживает маркированные списки (bullet) с отдельным стилем и формулы (MathML + fallback).
-        """
+    def _format_text_panel(self, slide_info: dict) -> str:
+        """Формирует HTML-панель с чередованием текста, таблиц и формул."""
         parts = []
         bullet_config = DESIGN_CONFIG.get("bullet_lists", {})
         bullet_icon_map = bullet_config.get("icon_map", {})
-        bullet_icon_size = DESIGN_CONFIG["icon_size"] # Упорядочиваем размер к общему 1.6rem
+        bullet_icon_size = DESIGN_CONFIG["icon_size"]
         bullet_indent = bullet_config.get("indent", "2rem")
-        bullet_border = bullet_config.get(
-            "border_left", "2px solid rgba(0,242,255,0.15)"
-        )
+        bullet_border = bullet_config.get("border_left", "2px solid rgba(0,242,255,0.15)")
         bullet_bg = bullet_config.get("background", "rgba(0,242,255,0.03)")
 
-        # Группировка параграфов для предотвращения дробления на "поля"
-        current_group = []
-        
-        def render_group(group_paragraphs):
-            if not group_paragraphs: return ""
-            # Очищаем текст для поиска иконки по первому параграфу
-            first_txt = re.sub(r'<[^>]+>', '', group_paragraphs[0])
-            icon = self.get_icon_by_text(first_txt)
-            inner_html = "<br/>".join(group_paragraphs)
-            return (
-                f'<div class="list-item">'
-                f'<i data-lucide="{icon}" style="width: {DESIGN_CONFIG["icon_size"]}; height: {DESIGN_CONFIG["icon_size"]};"></i>'
-                f'<div class="list-text">{inner_html}</div></div>'
-            )
+        # Итерируемся по объединенному списку контента для соблюдения порядка
+        for item_block in slide_info.get("content_items", []):
+            item_type = item_block["type"]
+            data = item_block["data"]
 
-        for p in plain_text:
-            paragraph_segments = []
-            if isinstance(p, list):
-                for seg in p:
-                    if seg.startswith("\0MATHML_BEGIN\0"):
-                        mathml = seg[len("\0MATHML_BEGIN\0") : -len("\0MATHML_END\0")]
-                        paragraph_segments.append(f'<span class="formula-container"><math xmlns="http://www.w3.org/1998/Math/MathML">{mathml}</math></span>')
-                    elif seg.startswith("\0FORMULA_FALLBACK\0"):
-                        fb = seg[len("\0FORMULA_FALLBACK\0") : -len("\0END\0")]
-                        paragraph_segments.append(f'<span class="formula-fallback">{esc(fb)}</span>')
-                    else:
-                        paragraph_segments.append(esc(seg))
-            else:
-                paragraph_segments.append(esc(p))
-            
-            full_html = "".join(paragraph_segments)
-            if not full_html.strip(): continue
-
-            clean_search_text = re.sub(r'<[^>]+>', '', full_html)
-            items = self._split_text_into_items(clean_search_text)
-            
-            # Обработка каждого элемента (если параграф был разбит на пункты)
-            for item in items:
-                if item.get("is_bullet"):
-                    # Приоритет тематической иконке - ищем по очищенному тексту
-                    keyword_icon = self.get_icon_by_text(item["text"])
-                    default_bullet = "chevron-right"
+            if item_type == "text":
+                # Обработка сегментированных параграфов
+                for p in data:
+                    # 1. Сбор сегментов и замена формул на токены
+                    segments_to_join = []
+                    formula_store = {}
                     
-                    if keyword_icon != default_bullet:
-                        icon = keyword_icon
+                    if isinstance(p, list):
+                        for idx, seg in enumerate(p):
+                            if seg.startswith("[[[MML_START]]]"):
+                                token = f"[[_F{idx}_]]"
+                                mathml = seg[len("[[[MML_START]]]"): -len("[[[MML_END]]]")]
+                                formula_store[token] = f'<span class="formula-container">{mathml}</span>'
+                                segments_to_join.append(token)
+                            elif seg.startswith("[[[MML_FB_START]]]"):
+                                token = f"[[_FB{idx}_]]"
+                                fb = seg[len("[[[MML_FB_START]]]"): -len("[[[MML_FB_END]]]")]
+                                formula_store[token] = f'<span class="formula-fallback">{esc(fb)}</span>'
+                                segments_to_join.append(token)
+                            else:
+                                segments_to_join.append(seg)
                     else:
-                        icon = bullet_icon_map.get(item.get("bullet_char"), "chevron-right")
-                        
-                    parts.append(
-                        f'<div class="list-item-bullet" style="padding-left: {bullet_indent}; border-left: {bullet_border}; background: {bullet_bg};">'
-                        f'<i data-lucide="{icon}" style="width: {bullet_icon_size}; height: {bullet_icon_size}; flex-shrink: 0;"></i>'
-                        f'<div class="list-text">{item["text"]}</div></div>'
-                    )
-                else:
-                    keyword_icon = self.get_icon_by_text(item["text"])
-                    parts.append(
-                        f'<div class="list-item">'
-                        f'<i data-lucide="{keyword_icon}" style="width: {DESIGN_CONFIG["icon_size"]}; height: {DESIGN_CONFIG["icon_size"]}; flex-shrink: 0;"></i>'
-                        f'<div class="list-text">{item["text"]}</div></div>'
-                    )
+                        segments_to_join.append(str(p))
 
-        if tables_html:
-            for t in tables_html:
-                parts.append(t)
+                    full_content_with_tokens = "".join(segments_to_join)
+                    if not full_content_with_tokens.strip():
+                        continue
+
+                    # 2. Очистка для поиска буллитов (наши токены выживут)
+                    clean_search_text = re.sub(r"<[^>]+>", "", full_content_with_tokens)
+                    items = self._split_text_into_items(clean_search_text)
+
+                    for item in items:
+                        # 3. Экранируем текст и возвращаем формулы
+                        display_text = html.escape(item["text"])
+                        for token, real_html in formula_store.items():
+                            display_text = display_text.replace(token, real_html)
+                        
+                        if item.get("is_bullet"):
+                            keyword_icon = self.get_icon_by_text(item["text"])
+                            default_bullet = "chevron-right"
+                            if keyword_icon != default_bullet:
+                                icon = keyword_icon
+                            else:
+                                icon = bullet_icon_map.get(item.get("bullet_char"), "chevron-right")
+
+                            parts.append(
+                                f'<div class="list-item-bullet" style="padding-left: {bullet_indent}; border-left: {bullet_border}; background: {bullet_bg};">'
+                                f'<i data-lucide="{icon}" style="width: {bullet_icon_size}; height: {bullet_icon_size}; flex-shrink: 0;"></i>'
+                                f'<div class="list-text">{display_text}</div></div>'
+                            )
+                        else:
+                            keyword_icon = self.get_icon_by_text(item["text"])
+                            parts.append(
+                                f'<div class="list-item">'
+                                f'<i data-lucide="{keyword_icon}" style="width: {DESIGN_CONFIG["icon_size"]}; height: {DESIGN_CONFIG["icon_size"]}; flex-shrink: 0;"></i>'
+                                f'<div class="list-text">{display_text}</div></div>'
+                            )
+
+            elif item_type == "table":
+                parts.append(str(data))
+
+            elif item_type == "formula":
+                parts.append(f'<div class="formula-block animate-up">{data}</div>')
+
         return "".join(parts)
+        
 
     def generate_html(self) -> None:
         """Генерирует итоговый HTML-файл на основе встроенного шаблона и данных слайдов."""
@@ -2610,14 +2738,14 @@ class PPTConverter:
             scripts_to_inline = [
                 ("libs/gsap/gsap.min.js", r'<script src="libs/gsap/gsap.min.js" defer></script>'),
                 ("libs/lucide/lucide.min.js", r'<script src="libs/lucide/lucide.min.js" defer></script>'),
-                ("libs/mathjax/tex-mml-chtml.js", r'<!-- Local MathJax for professional formula rendering -->\s*<script src="libs/mathjax/tex-mml-chtml.js" defer></script>')
+                ("libs/mathjax/tex-mml-svg.js", r'<script src="libs/mathjax/tex-mml-svg.js" defer></script>')
             ]
             
             for rel_path, pattern in scripts_to_inline:
                 s_path = BASE_DIR / rel_path
                 s_content = self._get_file_content(s_path)
-                # Избегаем bad escape \d в s_content через лямбду
-                head_part = re.sub(pattern, lambda m, content=s_content: f'<script>{content}</script>', head_part)
+                # Robust replacement using lambda to avoid escape issues in large blocks
+                head_part = re.sub(pattern, lambda m, c=s_content: f'<script>{c}</script>', head_part, flags=re.DOTALL)
         else:
             logo = DESIGN_CONFIG["paths"]["logo_white"]
 
@@ -2628,14 +2756,19 @@ class PPTConverter:
             num = idx + 1
             title = data["title"]
             section_tag = self._generate_section_tag(data)
-            text_panel_html = self._format_text_panel(
-                data["plain_text"], data.get("tables_html")
-            )
+            text_panel_html = self._format_text_panel(data)
 
-            # --- Умный шрифт: расчет panel_class на основе длины текста и макета ---
-            total_text_chars = sum(len(p) for p in data["plain_text"])
-            if data.get("tables_html"):
-                total_text_chars += len(data["tables_html"]) * 200
+            # --- Умный шрифт: расчет panel_class на основе сложности контента ---
+            total_text_chars = 0
+            for item in data.get("content_items", []):
+                if item["type"] == "text":
+                    for p in item["data"]:
+                        total_text_chars += sum(len(s) for s in p if isinstance(s, str))
+                elif item["type"] == "table":
+                    total_text_chars += 500  # Tables add significant visual density
+                elif item["type"] == "formula":
+                    total_text_chars += 100
+
 
             # Полноэкранные макеты имеют больше места (~в 2 раза больше по ширине)
             layout_multiplier = 1.0
@@ -2816,6 +2949,7 @@ class PPTConverter:
         logger.info(f" Всего слайдов:   {self.stats['total_slides']}")
         logger.info(f" Успешных фото:   {self.stats['images_ok']}")
         logger.info(f" Таблиц:          {self.stats['tables']}")
+        logger.info(f" Формул:          {self.stats['formulas']}")
         logger.info(f" Пропущено:       {self.stats['images_fail']} (см. лог выше)")
         logger.info("=" * 40)
 
@@ -2831,3 +2965,4 @@ if __name__ == "__main__":
         logger.info(f"Готово! Файл создан: {conv.output_html}")
     else:
         logger.error(f"Не найден входной файл .pptx: {ppt_file}")
+
