@@ -109,20 +109,19 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
                 --logo-height: 160px;
                 --logo-top: -1.0rem;
                 --logo-right: 4rem;
-                --header-height: 85px;
+                --header-height: 75px;
                 --slide-padding-v: 2rem;
                 --slide-padding-h: 4rem;
-                --panel-padding: 2.5rem;
+                --panel-padding: 2.0rem;
 
-                --fs-main-title: 3.5rem;
-                --fs-slide-title: 1.5rem;
+                --fs-main-title: 4.2rem;
+                --fs-slide-title: 1.4rem;
                 --fs-slide-num: 1.1rem;
                 --fs-sub-heading: 1.8rem;
                 --fs-text-main: 1.3rem;
                 --fs-tag: 0.9rem;
                 --fs-viz-caption: 1.1rem;
                 --fs-viz-desc: 1.0rem;
-
                 --fs-presenter-name: 1.5rem;
                 --fs-presenter-info: 1.1rem;
                 --fs-presenter-label: 0.8rem;
@@ -131,11 +130,15 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
                 /* Таблицы */
                 --fs-table-th: 1.05rem;
                 --fs-table-td: 1.1rem;
-
                 --fs-formula: 1.25rem;
-
                 --gap-main: 2rem;
                 --gap-items: 1.2rem;
+
+                /* Adaptive Squeeze Factors */
+                --squeeze-factor: 1;
+                --base-gap: 0.5rem;
+                --base-margin: 0.5rem;
+                --base-lh: 1.6;
 
                 /* Config-driven variables */
                 --icon-size: 1.6rem;
@@ -260,7 +263,7 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
             display: flex;
             flex-direction: column;
             justify-content: center;
-            max-width: 900px;
+            max-width: 1400px;
             margin: 0 auto;
             width: 100%;
         }
@@ -380,12 +383,12 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
 
         .viz-caption {
             border-left: 4px solid var(--accent);
-            padding: 0.75rem 1rem;
+            padding: calc(0.5rem * var(--squeeze-factor)) calc(1rem * var(--squeeze-factor));
             background: linear-gradient(to right, var(--accent-soft), transparent);
             color: var(--text-main);
             font-size: var(--fs-viz-caption);
             font-weight: 600;
-            line-height: 1.4;
+            line-height: 1.3;
         }
 
         .data-table {
@@ -427,17 +430,13 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
             border-radius: 8px;
             display: flex;
             flex-direction: column;
-            gap: 0.75rem;
-            overflow-y: auto;
+            gap: calc(var(--base-gap) * var(--squeeze-factor));
+            overflow-y: hidden;
             box-shadow: inset 0 1px 0 rgba(255,255,255,0.1), inset 1px 0 0 rgba(255,255,255,0.05), 0 8px 32px rgba(0,0,0,0.3);
             position: relative;
         }
 
-        .analytical-panel::before {
-            content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E");
-            pointer-events: none; z-index: -1; opacity: 0.15;
-        }
+
 
         .section-tag {
             font-family: 'Roboto Mono', monospace;
@@ -452,13 +451,13 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
         .sub-heading {
             font-size: var(--fs-sub-heading);
             font-weight: 600;
-            margin-bottom: 0.75rem;
+            margin-bottom: calc(var(--base-margin) * var(--squeeze-factor));
         }
 
         .list-item {
             display: flex;
             gap: 1rem;
-            margin-bottom: 0.75rem;
+            margin-bottom: calc(var(--base-margin) * var(--squeeze-factor));
             align-items: flex-start;
         }
 
@@ -474,7 +473,7 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
         .list-item-bullet {
             display: flex;
             gap: 1rem;
-            margin-bottom: 0.75rem;
+            margin-bottom: calc(var(--base-margin) * var(--squeeze-factor));
             align-items: flex-start;
             padding-left: var(--bullet-indent);
             border-left: var(--bullet-border);
@@ -508,7 +507,7 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
         .list-text {
             color: var(--text-dim);
             font-size: var(--fs-text-main);
-            line-height: 1.6;
+            line-height: calc(var(--base-lh) * var(--squeeze-factor));
         }
 
         .list-text strong {
@@ -540,15 +539,14 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
             background: var(--bg-card);
             backdrop-filter: blur(12px);
             border: 1px solid var(--glass-border);
-            padding: 2rem;
-            border-radius: 16px;
-            margin: 1.5rem 0;
+            padding: 1rem 1.5rem;
+            margin: 0.75rem 0;
             display: flex;
             justify-content: center;
             align-items: center;
             box-shadow: 0 12px 40px rgba(0,0,0,0.4);
             opacity: 0;
-            transform: translateY(15px);
+            transform: translateY(10px);
             transition: border-color 0.4s, box-shadow 0.4s;
         }
 
@@ -830,42 +828,6 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
             animation: pulse-rocket 2s infinite ease-in-out;
         }
 
-        /* Уровни плотности для переполненного контента (автоматически применяются через JS) */
-        .layout-dense {
-            --gap-main: 0.6rem !important;
-            gap: 0.6rem !important;
-        }
-        .layout-dense .list-item, 
-        .layout-dense .list-item-bullet {
-            margin-bottom: 0.4rem !important;
-            padding-top: 0.25rem !important;
-            padding-bottom: 0.25rem !important;
-        }
-        .layout-dense .sub-heading {
-            margin-bottom: 0.5rem !important;
-        }
-        .layout-dense .list-text {
-            line-height: 1.4 !important;
-        }
-
-        .layout-compact {
-            --gap-main: 0.25rem !important;
-            gap: 0.25rem !important;
-            font-size: 0.95em !important;
-        }
-        .layout-compact .list-item, 
-        .layout-compact .list-item-bullet {
-            margin-bottom: 0.15rem !important;
-            padding-top: 0.1rem !important;
-            padding-bottom: 0.1rem !important;
-        }
-        .layout-compact .sub-heading {
-            margin-bottom: 0.2rem !important;
-        }
-        .layout-compact .list-text {
-            line-height: 1.25 !important;
-        }
-
         @keyframes pulse-rocket {
             0% { transform: scale(1); filter: drop-shadow(0 0 5px var(--accent)); }
             50% { transform: scale(1.1); filter: drop-shadow(0 0 15px var(--accent)); }
@@ -1104,30 +1066,82 @@ BASE_HTML_TAIL = """
         /**
          * Автоматическое уплотнение контента при переполнении (Overflow Detection)
          */
-        function applyDynamicDensity() {
+        /**
+         * Ультра-адаптивная функция плотности контента (Nuclear Fix)
+         * Реализует многоходовое сжатие с запасом 10% и экстренным уменьшением шрифта.
+         */
+        async function applyDynamicDensity() {
             const panels = document.querySelectorAll('.analytical-panel');
-            panels.forEach(panel => {
-                // Сбрасываем классы для чистого пересчета
-                panel.classList.remove('layout-dense', 'layout-compact');
+            
+            for (const panel of panels) {
+                // 0. Сброс к дефолту
+                panel.style.setProperty('--squeeze-factor', '1.0');
+                panel.style.fontSize = ""; // сброс экстренного шрифта
+                panel.style.overflowY = 'hidden';
+                panel.style.paddingBottom = '0px';
+
+                // Даем браузеру секунду на осознание (или requestAnimationFrame)
+                await new Promise(r => requestAnimationFrame(r));
                 
-                // Пересчитываем: если контент не влезает, пробуем уровни плотности
-                if (panel.scrollHeight > panel.clientHeight) {
-                    panel.classList.add('layout-dense');
+                let sH = panel.scrollHeight;
+                let cH = panel.clientHeight;
+
+                if (sH > cH + 1) {
+                    // 1. Первая итерация: Сжатие интервалов с 7% запасом (relative safety margin)
+                    // (cH/sH) * 0.93
+                    let factor = (cH / sH) * 0.93;
+                    factor = Math.max(0.60, factor); // Разрешаем сжимать до 60%
                     
-                    // Если всё еще не влезает после первого уровня, применяем максимальное уплотнение
-                    if (panel.scrollHeight > panel.clientHeight) {
-                        panel.classList.replace('layout-dense', 'layout-compact');
+                    panel.style.setProperty('--squeeze-factor', factor.toFixed(3));
+                    panel.style.paddingBottom = '4px'; // Технический зазор
+                    
+                    // Ждем применения стилей
+                    await new Promise(r => requestAnimationFrame(r));
+                    
+                    // 2. Если все еще не влезло (после MathJax и прочего)
+                    if (panel.scrollHeight > panel.clientHeight + 1) {
+                        // Пробуем "дожать" интервалы до абсолютного минимума
+                        if (factor > 0.61) {
+                            factor = Math.max(0.60, factor * 0.95);
+                            panel.style.setProperty('--squeeze-factor', factor.toFixed(3));
+                            await new Promise(r => requestAnimationFrame(r));
+                        }
+                        
+                        // 3. ЭКСТРЕННЫЙ ПЛАН (Emergency Font Scaling)
+                        // Если даже при факторе 0.60 не влезает - уменьшаем шрифт
+                        if (panel.scrollHeight > panel.clientHeight + 1) {
+                            panel.style.fontSize = "0.92em";
+                            await new Promise(r => requestAnimationFrame(r));
+                            
+                            // Последняя попытка пересчитать фактор под новый размер шрифта
+                            let finalSH = panel.scrollHeight;
+                            let finalCH = panel.clientHeight;
+                            if (finalSH > finalCH + 1) {
+                                let finalFactor = Math.max(0.60, (finalCH / finalSH) * 0.95);
+                                panel.style.setProperty('--squeeze-factor', finalFactor.toFixed(3));
+                                await new Promise(r => requestAnimationFrame(r));
+                            }
+                        }
+                    }
+
+                    // 4. Финальный вердикт: если даже ядерный удар не помог - включаем скролл
+                    if (panel.scrollHeight > panel.clientHeight + 2) {
+                        panel.style.overflowY = 'auto';
                     }
                 }
-            });
+            }
         }
 
-        // Запуск после загрузки и при изменении размера окна
         window.addEventListener('load', () => {
-            // Небольшая задержка, чтобы шрифты и картинки успели отрисоваться
-            setTimeout(applyDynamicDensity, 200);
+            // Запуск через небольшую паузу для готовности MathJax
+            setTimeout(applyDynamicDensity, 500);
         });
-        window.addEventListener('resize', applyDynamicDensity);
+        
+        let resizeTimer;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(applyDynamicDensity, 200);
+        });
     </script>
 </body>
 </html>
@@ -2063,16 +2077,21 @@ class PPTConverter:
                             segments.append(result)
                         continue
                     
-                    # Обычный текст + проверка на подстрочные/надстрочные знаки (a:rPr baseline)
+                    # Обычный текст + проверка на форматирование (sub/sup/bold/italic)
                     t_elems = child.findall(".//a:t", NS)
                     txt = "".join(t.text or "" for t in t_elems)
                     if txt:
-                        # Проверяем rPr на baseline
                         rPr = child.find(".//a:rPr", NS)
                         if rPr is not None:
                             bl = rPr.get("baseline")
-                            is_sub = rPr.get("subscript") in ("1", "true", True)
-                            is_sup = rPr.get("superscript") in ("1", "true", True)
+                            # Поддержка различных способов представления индексов
+                            is_sub = (rPr.get("subscript") in ("1", "true", True) or 
+                                      child.find(".//a:subscript", NS) is not None)
+                            is_sup = (rPr.get("superscript") in ("1", "true", True) or 
+                                      child.find(".//a:superscript", NS) is not None)
+                            is_bold = rPr.get("b") in ("1", "true", True)
+                            is_italic = rPr.get("i") in ("1", "true", True)
+                            
                             if bl:
                                 try:
                                     val = int(bl)
@@ -2080,10 +2099,15 @@ class PPTConverter:
                                     elif val > 0: is_sup = True
                                 except: pass
                             
+                            # Применяем маркеры, которые выживут при экранировании html.escape
                             if is_sub:
-                                txt = f"<sub>{txt}</sub>"
+                                txt = f"[[SUB_S]]{txt}[[SUB_E]]"
                             elif is_sup:
-                                txt = f"<sup>{txt}</sup>"
+                                txt = f"[[SUP_S]]{txt}[[SUP_E]]"
+                            if is_bold:
+                                txt = f"[[B_S]]{txt}[[B_E]]"
+                            if is_italic:
+                                txt = f"[[I_S]]{txt}[[I_E]]"
                         current_text.append(txt)
                 
                 # 2. Обработка переноса строки
@@ -2240,14 +2264,26 @@ class PPTConverter:
         return f'<table class="data-table"><tbody>{"".join(rows_html)}</tbody></table>'
 
     def _clean_speaker_name(self, name: str) -> tuple[str, str]:
-        """Очищает и разделяет имя докладчика и дополнительную информацию."""
-        name = name.strip()
-        name = re.sub(r"^[Дд]окладчик:\s*", "", name)
-        name = re.sub(r"^[Дд]окладчик\s*[-–—:]\s*", "", name)
-        parts = name.split("\n")
+        """Очищает и разделяет имя докладчика и дополнительную информацию.
+        Учитывает наличие маркеров форматирования.
+        """
+        # Сначала убираем вообще все маркеры для поиска меток типа "Докладчик"
+        clean_text = re.sub(r"\[\[.*?\]\]", "", name).strip()
+        
+        # Удаляем типовые метки
+        clean_text = re.sub(r"^[Дд]окладчик:\s*", "", clean_text)
+        clean_text = re.sub(r"^[Дд]окладчик\s*[-–—:]\s*", "", clean_text)
+        clean_text = re.sub(r"^[Аа]втор:\s*", "", clean_text)
+        clean_text = re.sub(r"^[Вв]ыполнил:\s*", "", clean_text)
+        
+        # Если после очистки ничего не осталось, возвращаем пустые строки
+        if not clean_text:
+            return "", ""
+
+        parts = clean_text.split("\n")
         if len(parts) >= 2:
             return parts[0].strip(), "\n".join(parts[1:]).strip()
-        return name, ""
+        return clean_text, ""
 
     def _iter_slide_shapes(self, slide):
         """
@@ -2364,7 +2400,11 @@ class PPTConverter:
                 # 3. ФОРМУЛЫ (Standalone OMML / OLE с OMML)
                 else:
                     NS_M = {"m": "http://schemas.openxmlformats.org/officeDocument/2006/math"}
-                    omath = elem.find('.//m:oMath', NS_M) or elem.find('.//m:oMathPara', NS_M)
+                    # Explicit check to avoid FutureWarning in truth value of elements
+                    omath = elem.find('.//m:oMath', NS_M)
+                    if omath is None:
+                        omath = elem.find('.//m:oMathPara', NS_M)
+                    
                     if omath is not None:
                         try:
                             # Пытаемся извлечь позицию из XML, если shape=None
@@ -2551,10 +2591,37 @@ class PPTConverter:
                             if txt: presenter_items.append(txt)
                 
                 if presenter_items:
-                    slide_info["title"] = presenter_items[0]
-                    name, info = self._clean_speaker_name("\n".join(presenter_items[1:]))
-                    slide_info["speaker_name"] = name if name else "Докладчик"
-                    slide_info["speaker_info"] = info
+                    # Попытаемся найти именно имя, пропуская явные заголовки "Докладчик"
+                    title_candidate = presenter_items[0]
+                    speaker_candidate = ""
+                    info_candidate = ""
+                    
+                    # Просматриваем остальные элементы
+                    remaining = presenter_items[1:]
+                    found_name = False
+                    
+                    for i, item in enumerate(remaining):
+                        pure_item = re.sub(r"\[\[.*?\]\]", "", item).strip()
+                        # Если это просто слово "Докладчик", пропускаем его и берем следующее как имя
+                        if pure_item.lower() in ("докладчик", "докладчик:", "выполнил", "автор"):
+                            continue
+                        
+                        if not found_name:
+                            name, info = self._clean_speaker_name("\n".join(remaining[i:]))
+                            speaker_candidate = name
+                            info_candidate = info
+                            found_name = True
+                            break
+                    
+                    # Фолбэк, если ничего не нашли по логике выше
+                    if not found_name and remaining:
+                        name, info = self._clean_speaker_name("\n".join(remaining))
+                        speaker_candidate = name
+                        info_candidate = info
+
+                    slide_info["title"] = title_candidate
+                    slide_info["speaker_name"] = speaker_candidate if speaker_candidate else "Докладчик"
+                    slide_info["speaker_info"] = info_candidate
                 else:
                     slide_info["speaker_name"] = "Докладчик"
                     slide_info["speaker_info"] = ""
@@ -2652,8 +2719,15 @@ class PPTConverter:
                     items = self._split_text_into_items(clean_search_text)
 
                     for item in items:
-                        # 3. Экранируем текст и возвращаем формулы
+                        # 3. Экранируем текст и возвращаем формулы и форматирование
                         display_text = html.escape(item["text"])
+                        
+                        # Возврат форматирования из маркеров
+                        display_text = display_text.replace("[[SUB_S]]", "<sub>").replace("[[SUB_E]]", "</sub>")
+                        display_text = display_text.replace("[[SUP_S]]", "<sup>").replace("[[SUP_E]]", "</sup>")
+                        display_text = display_text.replace("[[B_S]]", "<strong>").replace("[[B_E]]", "</strong>")
+                        display_text = display_text.replace("[[I_S]]", "<em>").replace("[[I_E]]", "</em>")
+
                         for token, real_html in formula_store.items():
                             display_text = display_text.replace(token, real_html)
                         
@@ -2693,10 +2767,12 @@ class PPTConverter:
 
         # Регулировка <title> и имени файла на основе данных докладчика
         speaker_name = self.slides_data[0].get("speaker_name", "") if self.slides_data else ""
+        # Очистка имени от ВСЕХ маркеров форматирования для использования в заголовках и именах файлов
+        clean_speaker = re.sub(r"\[\[.*?\]\]", "", speaker_name)
         
         # 1. Сначала определяем имя на основе докладчика
-        if speaker_name:
-            safe_name = re.sub(r'[\\/*?:"<>|]', '', speaker_name).strip()
+        if clean_speaker:
+            safe_name = re.sub(r'[\\/*?:"<>|]', '', clean_speaker).strip()
             if safe_name:
                 # Добавляем ПНИПУ только в название файла
                 self.output_html = f"{safe_name} (ПНИПУ).html"
@@ -2711,7 +2787,7 @@ class PPTConverter:
         tail_part = BASE_HTML_TAIL
         
         # Регулировка <title> в head_part
-        s_title = speaker_name if speaker_name else "Доклад"
+        s_title = clean_speaker if clean_speaker else "Доклад"
         head_part = head_part.replace("{speaker_name}", s_title)
 
         # Logo path resolution
@@ -2763,26 +2839,30 @@ class PPTConverter:
             for item in data.get("content_items", []):
                 if item["type"] == "text":
                     for p in item["data"]:
-                        total_text_chars += sum(len(s) for s in p if isinstance(s, str))
+                        for s in p:
+                            if isinstance(s, str):
+                                # Считаем количество формул в сегменте
+                                f_count = s.count("[[[MML_START]]]") + s.count("[[[MML_FB_START]]]")
+                                if f_count > 0:
+                                    # Очищаем сегмент от кода формул для честного подсчета текста
+                                    # Ищем все вхождения [[[MML...]]] и удаляем их содержимое
+                                    clean_s = re.sub(r"\[\[\[MML_START\]\].*?\[\[\[MML_END\]\]\]", "", s, flags=re.DOTALL)
+                                    clean_s = re.sub(r"\[\[\[MML_FB_START\]\].*?\[\[\[MML_FB_END\]\]\]", "", clean_s, flags=re.DOTALL)
+                                    # Также очищаем от новых маркеров форматирования
+                                    clean_s = re.sub(r"\[\[[A-Z0-9_]+\]\]", "", clean_s)
+                                    
+                                    total_text_chars += len(clean_s)
+                                    total_text_chars += (f_count * 20) # Significantly reduced weight for inline formulas
+                                else:
+                                    clean_s = re.sub(r"\[\[[A-Z0-9_]+\]\]", "", s)
+                                    total_text_chars += len(clean_s)
                 elif item["type"] == "table":
-                    total_text_chars += 500  # Tables add significant visual density
+                    total_text_chars += 300  # Reduced table density impact
                 elif item["type"] == "formula":
-                    total_text_chars += 100
+                    total_text_chars += 40 # Standalone formulas weight even less now
 
-
-            # Полноэкранные макеты имеют больше места (~в 2 раза больше по ширине)
-            layout_multiplier = 1.0
-            if data["layout_type"] in ["intro", "full_text"]:
-                layout_multiplier = 2.0
-
-            threshold_condensed = TEXT_LEN_CONDENSED * layout_multiplier
-            threshold_tight = TEXT_LEN_TIGHT * layout_multiplier
 
             panel_class = "analytical-panel animate-up"
-            if total_text_chars > threshold_tight:
-                panel_class += " panel-tight"
-            elif total_text_chars > threshold_condensed:
-                panel_class += " panel-condensed"
             # -------------------------------------------------------------
 
             if is_standalone:
@@ -2854,8 +2934,8 @@ class PPTConverter:
         <section class="slide">
             <div class="logo-container"><img src="{logo}" alt="Логотип" class="header-logo" onerror="this.style.display='none'; this.onerror=null;"></div>
             <div class="slide-header"><div class="slide-number">{num:02d} / {total:02d}</div><div class="slide-title">{esc(title)}</div></div>
-            <div class="slide-content-full animate-up" style="width: 85%; margin: 2rem auto;">
-                <div class="{panel_class}">
+            <div class="slide-content-full animate-up" style="width: 85%; margin: 2rem auto; height: calc(100% - 145px); min-height: 0;">
+                <div class="{panel_class}" style="height: 100%;">
                     {text_panel_html}
                 </div>
             </div>
@@ -2885,9 +2965,9 @@ class PPTConverter:
                         cont_w = 1200 # Условное значение для расчета Area
                     else:
                         # --- Расчет по плотности для МНОГОКОЛОНОЧНЫХ компоновок ---
-                        d_factor = max(0.65, min(1.3, total_text_chars / 600.0 + 0.5))
+                        d_factor = max(0.65, min(1.2, total_text_chars / 1200.0 + 0.5))
                         dynamic_ratio = base_ratio * d_factor
-                        dynamic_ratio = max(0.25, min(0.45, dynamic_ratio))
+                        dynamic_ratio = max(0.25, min(0.42, dynamic_ratio))
                         
                         grid_split = f"{dynamic_ratio:.3f}fr {1.0 - dynamic_ratio:.3f}fr"
                         cont_w = 1728 * (1.0 - dynamic_ratio)
