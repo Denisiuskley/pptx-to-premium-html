@@ -461,7 +461,7 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
             align-items: flex-start;
         }
 
-        .list-item i {
+        .list-item i, .list-item svg {
             margin-top: 4px;
             color: var(--accent);
             flex-shrink: 0;
@@ -499,13 +499,23 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
             border-radius: 0 8px 8px 0;
             padding: 0.5rem 1rem 0.5rem 0.5rem;
         }
-        .list-item-bullet i {
+        .list-item-bullet i, .list-item-bullet svg {
             margin-top: 4px;
             color: var(--accent);
             flex-shrink: 0;
             width: var(--bullet-icon-size);
             height: var(--bullet-icon-size);
             opacity: 0.85;
+        }
+
+        /* Специальный стиль для блока "Вывод:" */
+        .list-item-conclusion {
+            border-left: 4px solid var(--accent) !important;
+            background: linear-gradient(to right, var(--accent-soft), transparent) !important;
+            padding: 1rem 1rem 1rem 0.8rem !important;
+            border-radius: 4px 12px 12px 4px !important;
+            margin-top: 1rem;
+            margin-bottom: 1.5rem;
         }
 
         .viz-container:has(.viz-item) {
@@ -583,6 +593,12 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
         .formula-container mjx-container[jax="SVG"] {
             display: inline-block !important;
             vertical-align: middle !important;
+            base-line: middle !important;
+        }
+
+        .marker-stretched {
+            transform: scaleX(1.5);
+            display: inline-block;
         }
 
         .viz-box {
@@ -834,7 +850,7 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
             transform: translateX(10px);
             border-color: var(--accent);
         }
-        .summary-item i, .roadmap-item i {
+        .summary-item i, .summary-item svg, .roadmap-item i, .roadmap-item svg {
             color: var(--accent);
             flex-shrink: 0;
             margin-top: 4px;
@@ -931,11 +947,30 @@ BASE_HTML_TAIL = """
             if (activeSlideItems.length === 0) return;
             
             if (typeof gsap !== 'undefined') {
-                // Анимация текстовых блоков
-                gsap.fromTo(activeSlideItems,
-                    { opacity: 0, y: 30 },
-                    { opacity: 1, y: 0, duration: 0.8, stagger: 0.2, ease: "power2.out" }
-                );
+                // Анимация текстовых блоков (Ускорена: 0.5s / 0.1s)
+                // Исключаем визуальные элементы из анимации появления, чтобы избежать мерцания
+                const textItems = [];
+                const visualItems = [];
+
+                activeSlideItems.forEach(el => {
+                    if (el.closest('.img-stack') || el.closest('.viz-card') || el.closest('.viz-item') || el.tagName === 'IMG') {
+                        visualItems.push(el);
+                    } else {
+                        textItems.push(el);
+                    }
+                });
+
+                // Визуальные элементы показываем мгновенно и без смещения
+                if (visualItems.length > 0) {
+                    gsap.set(visualItems, { opacity: 1, y: 0, scale: 1 });
+                }
+
+                if (textItems.length > 0) {
+                    gsap.fromTo(textItems,
+                        { opacity: 0, y: 30 },
+                        { opacity: 1, y: 0, duration: 0.5, stagger: 0.1, ease: "power2.out" }
+                    );
+                }
 
                 // ОДНОВРЕМЕННАЯ анимация маркеров (Premium Pop-in)
                 const activeMarkers = presentation.querySelectorAll('.slide')[currentSlide].querySelectorAll('.animate-marker');
@@ -945,13 +980,12 @@ BASE_HTML_TAIL = """
                         { 
                             opacity: 1, 
                             scale: 1, 
-                            duration: 0.6, 
-                            stagger: 0.2, 
+                            duration: 0.4, 
+                            stagger: 0.1, 
                             ease: "back.out(1.7)",
                             onComplete: function() {
                                 // Запуск пульсации после завершения появления
                                 this.targets().forEach(el => {
-                                    // Добавляем класс пульсации непосредственно к SVG
                                     const svg = el.tagName.toLowerCase() === 'svg' ? el : el.querySelector('svg');
                                     if (svg) svg.classList.add('marker-pulse');
                                     else el.classList.add('marker-pulse');
@@ -1258,17 +1292,17 @@ DESIGN_CONFIG = {
     "bullet_lists": {
         "enabled": True,
         "icon_map": {
-            "•": "chevron-right",
-            "◦": "chevron-right",
-            "▪": "square",
-            "-": "chevron-right",
-            "–": "chevron-right",
-            "—": "chevron-right",
-            "*": "star",
-            "": "chevron-right",
-            "·": "dot",
-            "": "chevron-right",
-            "ü": "check",
+            "•": "diamond",
+            "◦": "diamond",
+            "▪": "diamond",
+            "-": "diamond",
+            "–": "diamond",
+            "—": "diamond",
+            "*": "diamond",
+            "": "diamond",
+            "·": "diamond",
+            "": "diamond",
+            "ü": "diamond",
         },
         "icon_size": "1.6rem",
         "indent": "2rem",
@@ -1581,7 +1615,7 @@ class PPTConverter:
                     clean_item = clean_text(item)
                     icon = self.get_icon_by_text(clean_item)
                     processed_items.append(
-                        f"<div class='summary-item animate-up'><i data-lucide='{icon}' class='animate-marker'></i> <div class='list-text'>{esc(clean_item)}</div></div>"
+                        f"<div class='summary-item animate-up'><i data-lucide='{icon}' class='animate-marker' style='width: 1.6rem; height: 1.6rem; flex-shrink: 0;'></i> <div class='list-text'>{esc(clean_item)}</div></div>"
                     )
 
                 mid = (len(processed_items) + 1) // 2
@@ -1602,7 +1636,7 @@ class PPTConverter:
                 for item in items:
                     clean_item = clean_text(item)
                     items_html.append(
-                        f"<div class='roadmap-item animate-up'><i data-lucide='rocket' class='animate-marker'></i> <div class='list-text'>{esc(clean_item)}</div></div>"
+                        f"<div class='roadmap-item animate-up'><i data-lucide='rocket' class='animate-marker' style='width: 1.6rem; height: 1.6rem; flex-shrink: 0;'></i> <div class='list-text'>{esc(clean_item)}</div></div>"
                     )
                 self.slides_data.append(
                     {
@@ -1920,25 +1954,37 @@ class PPTConverter:
                 vis["caption"] = best_match["text"]
                 used_texts.add(best_match["text"])
                 
-                # КОРРЕКЦИЯ: Надежная фильтрация через нормализацию пробелов
+                # КОРРЕКЦИЯ: Более агрессивная фильтрация подписей
                 def normalize(s: str) -> str:
-                    return " ".join(s.split()).strip().lower()
+                    # Убираем все лишнее: пунктуацию, множественные пробелы, спецсимволы
+                    s = re.sub(r"[^\w\s]", "", s.lower())
+                    return " ".join(s.split()).strip()
                 
                 target = normalize(best_match["text"])
-                
+                if not target: continue
+
                 new_items = []
+                found_and_removed = False
                 for item in slide_info.get("content_items", []):
                     if item["type"] == "text":
                         new_paras = []
                         for p in item["data"]:
-                            p_text = normalize("".join(s for s in p if isinstance(s, str) and not s.startswith("[[[")))
-                            if p_text != target:
+                            # Очищаем параграф от вложенных формул для сравнения
+                            p_plain = "".join(s for s in p if isinstance(s, str) and not s.startswith("[[["))
+                            if normalize(p_plain) != target:
                                 new_paras.append(p)
+                            else:
+                                found_and_removed = True
                         if new_paras:
                             item["data"] = new_paras
                             new_items.append(item)
                     else:
                         new_items.append(item)
+                
+                if not found_and_removed:
+                    # Попытка частичного совпадения (если подпись — часть длинного блока)
+                    pass
+
                 slide_info["content_items"] = new_items
                 if best_score - second_best_score < 0.1 and second_best_score > 0:
                     logger.warning(
@@ -2413,6 +2459,16 @@ class PPTConverter:
                 # 1. СТАНДАРТНЫЙ ТЕКСТ (Text Frame)
                 if shape and shape.has_text_frame:
                     try:
+                        # Пропускаем заголовок слайда (он обрабатывается отдельно)
+                        if shape == slide.shapes.title:
+                            continue
+                            
+                        # ОЧИСТКА: Пропускаем блоки, которые дублируют название слайда (лишние подзаголовки)
+                        shape_txt = clean_text(shape.text)
+                        if shape_txt.lower() == slide_info["title"].lower():
+                            logger.debug(f"Slide {i+1}: skipping redundant title shape content")
+                            continue
+
                         all_paragraphs = self._extract_math_segments_from_textframe(shape.text_frame)
                         if all_paragraphs:
                             slide_info["content_items"].append({
@@ -2762,8 +2818,17 @@ class PPTConverter:
                     items = self._split_text_into_items(clean_search_text)
 
                     for item in items:
-                        # 3. Экранируем текст и возвращаем формулы и форматирование
-                        display_text = html.escape(item["text"])
+                        # 3. Логика распознавания «Вывода» и подготовка текста
+                        raw_text = item["text"].strip()
+                        is_conclusion = raw_text.lower().startswith("вывод:")
+                        
+                        if is_conclusion:
+                            # Очищаем от префикса «Вывод:»
+                            item_text = re.sub(r"^[Вв]ывод[:\s]+", "", raw_text).strip()
+                        else:
+                            item_text = item["text"]
+
+                        display_text = html.escape(item_text)
                         
                         # Возврат форматирования из маркеров
                         display_text = display_text.replace("[[SUB_S]]", "<sub>").replace("[[SUB_E]]", "</sub>")
@@ -2774,24 +2839,46 @@ class PPTConverter:
                         for token, real_html in formula_store.items():
                             display_text = display_text.replace(token, real_html)
                         
-                        if item.get("is_bullet"):
-                            keyword_icon = self.get_icon_by_text(item["text"])
-                            default_bullet = "chevron-right"
-                            if keyword_icon != default_bullet:
-                                icon = keyword_icon
+                        if is_conclusion:
+                            display_text = f"<strong>{display_text}</strong>"
+                        
+                        if item.get("is_bullet") or is_conclusion:
+                            if is_conclusion:
+                                icon = "check-check"
                             else:
-                                icon = bullet_icon_map.get(item.get("bullet_char"), "chevron-right")
+                                keyword_icon = self.get_icon_by_text(item["text"])
+                                default_bullet = "diamond"
+                                icon = keyword_icon if keyword_icon != "chevron-right" else default_bullet
+                            
+                            # Применяем вытягивание ромба через спец. класс
+                            marker_class = "animate-marker"
+                            if icon == "diamond":
+                                marker_class += " marker-stretched"
+
+                            # Специальная верстка для блока "Вывод:" с акцентной полосой
+                            wrapper_class = "list-item-bullet animate-up"
+                            wrapper_style = f"padding-left: {bullet_indent};"
+                            if is_conclusion:
+                                wrapper_class += " list-item-conclusion"
+                            else:
+                                wrapper_style += f" border-left: {bullet_border}; background: {bullet_bg};"
 
                             parts.append(
-                                f'<div class="list-item-bullet animate-up" style="padding-left: {bullet_indent}; border-left: {bullet_border}; background: {bullet_bg};">'
-                                f'<i data-lucide="{icon}" class="animate-marker" style="width: {bullet_icon_size}; height: {bullet_icon_size}; flex-shrink: 0;"></i>'
+                                f'<div class="{wrapper_class}" style="{wrapper_style}">'
+                                f'<i data-lucide="{icon}" class="{marker_class}" style="width: {bullet_icon_size}; height: {bullet_icon_size}; flex-shrink: 0;"></i>'
                                 f'<div class="list-text">{display_text}</div></div>'
                             )
                         else:
                             keyword_icon = self.get_icon_by_text(item["text"])
+                            icon = keyword_icon if keyword_icon != "chevron-right" else "diamond"
+                            
+                            marker_class = "animate-marker"
+                            if icon == "diamond":
+                                marker_class += " marker-stretched"
+
                             parts.append(
                                 f'<div class="list-item animate-up">'
-                                f'<i data-lucide="{keyword_icon}" class="animate-marker" style="width: {DESIGN_CONFIG["icon_size"]}; height: {DESIGN_CONFIG["icon_size"]}; flex-shrink: 0;"></i>'
+                                f'<i data-lucide="{icon}" class="{marker_class}" style="width: {DESIGN_CONFIG["icon_size"]}; height: {DESIGN_CONFIG["icon_size"]}; flex-shrink: 0;"></i>'
                                 f'<div class="list-text">{display_text}</div></div>'
                             )
 
@@ -2961,7 +3048,6 @@ class PPTConverter:
             <div class="slide-header"><div class="slide-number">{num:02d} / {total:02d}</div><div class="slide-title">{esc(title)}</div></div>
             <div class="slide-split" style="grid-template-columns: 1.4fr 0.8fr; height: calc(100% - 145px);">
                 <div class="{panel_class}">
-                    <span class="section-tag" style="font-size: var(--fs-tag);">План 2026</span>
                     {data["content_html"]}
                 </div>
                 <div class="viz-card animate-up" style="display: flex; flex-direction: column; justify-content: center; align-items: center; background: radial-gradient(circle, var(--accent-soft) 0%, transparent 80%); border-radius: 3rem; padding: 3rem; border: 1px solid var(--glass-border); position: relative; overflow: hidden; height: 100%;">
@@ -3045,7 +3131,7 @@ class PPTConverter:
             <div class="logo-container"><img src="{logo}" alt="Логотип" class="header-logo" onerror="this.style.display='none'; this.onerror=null;"></div>
             <div class="slide-header"><div class="slide-number">{num:02d} / {total:02d}</div><div class="slide-title">{esc(title)}</div></div>
             <div class="slide-split {layout_class}" style="grid-template-columns: {grid_split}; height: calc(100% - 145px); min-height: 0;">
-                <div class="{panel_class}"><span class="section-tag" style="font-size: var(--fs-tag);">{esc(section_tag)}</span>{text_panel_html}</div>
+                <div class="{panel_class}">{text_panel_html}</div>
                 <div class="img-stack animate-up" style="display: grid; grid-template-columns: {col_tmpl}; grid-template-rows: {row_tmpl}; gap: var(--gap-main);">{visuals_items_html}</div>
             </div>
         </section>"""
