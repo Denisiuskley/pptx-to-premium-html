@@ -9,16 +9,11 @@ except ImportError:
 def _save_image_with_white_bg(image_bytes: bytes, output_path: str) -> bool:
     """Обеспечивает белый фон для прозрачных изображений и сохраняет их по указанному пути."""
     try:
-        img = Image.open(io.BytesIO(image_bytes))
-        if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
-            background = Image.new("RGB", img.size, (255, 255, 255))
-            if img.mode == 'P':
-                img = img.convert('RGBA')
-            background.paste(img, mask=img.split()[3])
-            background.save(output_path, "PNG")
-        else:
-            with open(output_path, "wb") as f:
-                f.write(image_bytes)
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+        white_bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
+        composite = Image.alpha_composite(white_bg, img).convert("RGB")
+        composite.save(output_path, "PNG")
+        return True
         return True
     except Exception as e:
         print(f"[ImageHelper] Error: Failed to process image background: {e}")

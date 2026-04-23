@@ -73,9 +73,9 @@ DESIGN_CONFIG = {
         "text_panel_ratio": 0.35,
     },
     "paths": {
-        "logo_white": "logo/white.png",
+        "logo_white": "web_demo/logo/white.png",
         "media_output": "media/smart_present",
-        "media_output_full": str(BASE_DIR / "web_demo" / "media" / "smart_present"),
+        "media_output_full": str(BASE_DIR / "media" / "smart_present"),
         "env_path": str(BASE_DIR / ".env"),
         "cache_dir": str(BASE_DIR / ".cache" / "llm"),
     },
@@ -103,8 +103,12 @@ DESIGN_CONFIG = {
         "info": ["информ", "инфо", "описан", "сведен", "справоч", "примечан"],
         "box": ["модель", "коробка", "box"],
     },
-    "ai_config": {
-        "default_model": "google/gemini-flash-1.5",
+    "namespaces": {
+        "p": "http://schemas.openxmlformats.org/presentationml/2006/main",
+        "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+        "m": "http://schemas.openxmlformats.org/officeDocument/2006/math",
+        "mc": "http://schemas.openxmlformats.org/markup-compatibility/2006",
+        "a14": "http://schemas.microsoft.com/office/drawing/2014/main",
     },
     "STATIC_ASSETS_EMBED": True,
 }

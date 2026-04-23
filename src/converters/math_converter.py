@@ -6,12 +6,15 @@ from ..utils.text_helpers import esc
 
 logger = logging.getLogger(__name__)
 
-def token_type(txt: str) -> str:
+def token_type(txt: Optional[str]) -> str:
     """Определяет тип токена MathML (mn - число, mo - оператор, mi - идентификатор)."""
-    if txt.isdigit() or txt.replace('.', '').isdigit():
+    if not txt:
+        return "mi"
+    txt_str = str(txt)
+    if txt_str.isdigit() or txt_str.replace('.', '').isdigit():
         return "mn"
     ops = set("+-*/=<>≤≥≈≡∑∏∫∂∇±×÷∈∉⊂⊃∪∩∧∨¬∞∂")
-    if txt in ops:
+    if txt_str in ops:
         return "mo"
     return "mi"
 

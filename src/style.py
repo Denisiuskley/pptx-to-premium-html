@@ -15,7 +15,7 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
     <script>
         window.MathJax = {
             options: {
-                enableExplorer: false,
+                enableExplorer: false, // Отключаем Explorer, который может перекрывать формулы желтыми плашками
                 enableAssistiveMml: true
             },
             loader: {
@@ -30,6 +30,7 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
                     console.log('MathJax is ready (SVG mode)!');
                     MathJax.startup.defaultReady();
                     MathJax.startup.promise.then(() => {
+                        // Анимация появления формул после рендеринга
                         gsap.to('.formula-container, .formula-block', {
                             opacity: 1,
                             y: 0,
@@ -288,6 +289,7 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
             height: 100%;
             min-height: 0;
             width: 100%;
+            overflow: hidden; /* Firefox fix for image clipping */
         }
 
         .formula-block {
@@ -383,6 +385,7 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
             flex-direction: column;
             gap: calc(var(--base-gap) * var(--squeeze-factor));
             overflow-y: hidden;
+            min-height: 0; /* Firefox fix */
             box-shadow: inset 0 1px 0 rgba(255,255,255,0.1), inset 1px 0 0 rgba(255,255,255,0.05), 0 8px 32px rgba(0,0,0,0.3);
             position: relative;
         }
@@ -455,12 +458,32 @@ BASE_HTML_TEMPLATE = """<!DOCTYPE html>
         }
 
         .list-item-conclusion {
-            border-left: 4px solid var(--accent) !important;
-            background: linear-gradient(to right, var(--accent-soft), transparent) !important;
-            padding: 1rem 1rem 1rem 0.8rem !important;
-            border-radius: 4px 12px 12px 4px !important;
-            margin-top: 1rem;
-            margin-bottom: 1.5rem;
+            border-left: 5px solid var(--accent) !important;
+            background: linear-gradient(90deg, var(--accent-soft), transparent) !important;
+            padding: 1rem 1rem 1rem 1.2rem !important;
+            border-radius: 6px 16px 16px 6px !important;
+            margin-top: 1.2rem;
+            margin-bottom: 2rem;
+            position: relative;
+            overflow: visible;
+        }
+
+        .list-item-conclusion i, .list-item-conclusion svg {
+            animation: pulse-rocket 2s infinite ease-in-out;
+            filter: drop-shadow(0 0 8px var(--accent));
+        }
+
+        .list-item-conclusion::after {
+            content: '';
+            position: absolute;
+            left: -5px;
+            top: 20%;
+            height: 60%;
+            width: 8px;
+            background: var(--accent);
+            filter: blur(8px);
+            opacity: 0.6;
+            pointer-events: none;
         }
 
         .viz-container:has(.viz-item) {
