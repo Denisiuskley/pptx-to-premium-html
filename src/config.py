@@ -5,7 +5,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).parent.parent.resolve()
 
 # Данные по умолчанию
-DEFAULT_SPEAKER = "Усольцева В.В."
+DEFAULT_SPEAKER = ""
 DEFAULT_ORG = "ПНИПУ"
 
 # Константы порогов для динамической типографии и layout

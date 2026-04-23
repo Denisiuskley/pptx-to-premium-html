@@ -429,6 +429,8 @@ class PPTParser:
                         new_paras = []
                         for p in item["data"]:
                             p_plain = "".join(s for s in p if isinstance(s, str) and not s.startswith("[[["))
+                            # Очищаем от внутренних маркеров форматирования [[...]] для правильного сопоставления
+                            p_plain = re.sub(r'\[\[.*?\]\]', '', p_plain)
                             if normalize(p_plain) != target:
                                 new_paras.append(p)
                             else:
