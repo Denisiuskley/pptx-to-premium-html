@@ -55,7 +55,7 @@ def run_conversion(pptx_path: str):
 
 if __name__ == "__main__":
     # По умолчанию используем тестовый файл
-    target_pptx = "Промежуточная.pptx"
+    target_pptx = "data/Промежуточная.pptx"
     if len(sys.argv) > 1:
         target_pptx = sys.argv[1]
     

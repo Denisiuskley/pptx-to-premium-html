@@ -170,9 +170,9 @@ class HTMLGenerator:
         s_title = clean_speaker if clean_speaker else 'Доклад'
         head_part = head_part.replace('{speaker_name}', s_title)
         logo_rel = DESIGN_CONFIG['paths']['logo_white']
-        v_logo_path = BASE_DIR / 'web_demo' / logo_rel
+        v_logo_path = BASE_DIR / logo_rel
         if not v_logo_path.exists():
-            v_logo_path = BASE_DIR / logo_rel
+            v_logo_path = BASE_DIR / 'logo' / 'white.png'
         if is_standalone:
             logger.info('Подготовка автономного (standalone) файла (все ресурсы вшиваются)...')
             logo = self._get_data_uri(v_logo_path)
@@ -222,9 +222,9 @@ class HTMLGenerator:
                 embedded_count = 0
                 for vis in data.get('visuals', []):
                     if vis.get('src') and (not vis['src'].startswith('data:')):
-                        v_path = BASE_DIR / 'web_demo' / vis['src']
+                        v_path = BASE_DIR / vis['src']
                         if v_path.exists():
-                            vis['src'] = get_data_uri(v_path)
+                            vis['src'] = self._get_data_uri(v_path)
                             embedded_count += 1
                         else:
                             logger.warning(f'Медиа не найдено для эмбеддинга: {v_path}')

@@ -73,9 +73,9 @@ DESIGN_CONFIG = {
         "text_panel_ratio": 0.35,
     },
     "paths": {
-        "logo_white": "web_demo/logo/white.png",
-        "media_output": "media/smart_present",
-        "media_output_full": str(BASE_DIR / "media" / "smart_present"),
+        "logo_white": "logo/white.png",
+        "media_output": "media",
+        "media_output_full": str(BASE_DIR / "media"),
         "env_path": str(BASE_DIR / ".env"),
         "cache_dir": str(BASE_DIR / ".cache" / "llm"),
     },
