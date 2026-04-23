@@ -1,0 +1,26 @@
+[project]
+name = "pptx-to-premium-html"
+version = "1.0.0"
+description = "A modular pipeline to convert PowerPoint presentations into high-fidelity animated HTML"
+authors = [
+    {name = "Denisiuskley", email = "author@example.com"}
+]
+dependencies = [
+    "python-pptx>=0.6.21",
+    "requests>=2.28.0",
+    "lxml>=4.9.0",
+    "Pillow>=9.0.0",
+]
+requires-python = ">=3.9"
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+
+[tool.isort]
+profile = "black"
+line_length = 120

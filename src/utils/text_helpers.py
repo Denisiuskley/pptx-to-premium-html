@@ -8,15 +8,13 @@ def esc(text: str) -> str:
     return html.escape(str(text))
 
 def clean_text(text: str) -> str:
-    """Нормализует текст: заменяет неразрывные пробелы, убирает лишние пробелы."""
+    """Нормализует текст: заменяет любые пробельные символы (включая переносы и \xa0) на одиночные пробелы."""
     if not text:
         return ""
-    # Заменяем неразрывный пробел на обычный
-    text = text.replace("\xa0", " ").replace('\v', '\n')
     # Заменяем Wingdings bullets (U+F03E и подобные) на обычный bullet или удаляем
     text = re.sub(r"[\uf0b0-\uf0ff]", "", text)  # Private Use Area bullets
-    # Collapse multiple spaces
-    text = re.sub(r" +", " ", text)
+    # Заменяем все пробельные символы (включая \n, \r, \t, \xa0) на один пробел
+    text = re.sub(r"\s+", " ", text)
     return text.strip()
 
 def split_text(text: str) -> list:
